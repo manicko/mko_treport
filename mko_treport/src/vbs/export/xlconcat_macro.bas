@@ -228,7 +228,7 @@ Public Sub RunXlconcat()
 
     Set outWb = Workbooks.Add(xlWBATWorksheet)
     Set outWs = outWb.Worksheets(1)
-    outWs.name = "plans"
+    outWs.Name = "plans"
 
     ' --------------------------------------------------------
     ' Hide gridlines for the output workbook window
@@ -275,13 +275,13 @@ Public Sub RunXlconcat()
 
         For Each ws In wb.Worksheets
 
-            Debug.Print "  Sheet: '" & ws.name & "'  Visible=" & ws.Visible
+            Debug.Print "  Sheet: '" & ws.Name & "'  Visible=" & ws.Visible
 
             ' Skip hidden sheets (xlSheetHidden or xlSheetVeryHidden)
             If ws.Visible = xlSheetVisible Then
 
                 ' Skip excluded names
-                If Not excludeList.Exists(CleanName(ws.name)) Then
+                If Not excludeList.Exists(CleanName(ws.Name)) Then
 
                     Set srcRange = GetCopyRange(ws)
 
@@ -301,7 +301,7 @@ Public Sub RunXlconcat()
                             If isFirstDataSheet Then
                                 refColCount = srcRange.Columns.Count
                                 refFilePath = CStr(f)
-                                refSheetName = ws.name
+                                refSheetName = ws.Name
                                 Debug.Print "  Reference columns: " & refColCount & _
                                     " (first data sheet: " & refFilePath & "\" & refSheetName & ")"
                             ElseIf Not ignoreColMismatch Then
@@ -316,7 +316,7 @@ Public Sub RunXlconcat()
                                         "  Columns: " & refColCount & vbCrLf & vbCrLf & _
                                         "Current sheet:" & vbCrLf & _
                                         "  File:   " & CStr(f) & vbCrLf & _
-                                        "  Sheet:  " & ws.name & vbCrLf & _
+                                        "  Sheet:  " & ws.Name & vbCrLf & _
                                         "  Columns: " & srcRange.Columns.Count & vbCrLf & vbCrLf & _
                                         "Set ignore_col_mismatch = TRUE in the settings table to skip this check."
                                 End If
@@ -872,11 +872,11 @@ End Function
 ' ============================================================
 
 Private Function CleanName( _
-    ByVal name As String) As String
+    ByVal Name As String) As String
 
     Dim s As String
 
-    s = LCase$(Trim$(name))
+    s = LCase$(Trim$(Name))
     s = Replace(s, " ", "")
 
     CleanName = s
@@ -911,7 +911,7 @@ Private Function CollectInputFiles( _
 
     For Each file In folder.Files
 
-        fileName = CStr(file.name)
+        fileName = CStr(file.Name)
         extension = LCase$(fso.GetExtensionName(fileName))
 
         If extension = "xlsx" Or extension = "xls" Then
