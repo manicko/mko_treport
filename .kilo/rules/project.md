@@ -23,35 +23,10 @@
 8. **Meaningful & Consistent Naming**  
     Use clear, concise, and consistent names for files, functions, components, and variables.
 
-9. **Type Safety Everywhere**  
-   Use strict TypeScript on frontend and Pydantic v2 + type hints on backend. Share types via OpenAPI. Avoid `any` completely.
-
-10. **StrEnum for All Constants**  
-   All fixed values and settings must use `Enum` or `StrEnum` instead of dicts and lists. Keep them separately in models. 
-
-11. **Pydantic**  
-    All models and validation use Pydantic v2 (DTO/validation layer at system boundaries: bot input, settings schemas, future API). Django ORM remains the persistence layer for standard CRUD operations. 
-
-12. **No `print()` Statements**  
-    Use proper logging: `logger = logging.getLogger(__name__)`.
-
-13. Use database migrations for all schema changes
-    Database structure must be versioned and reproducible.
-
-14. Keep documentation updated continuously
-    Architecture decisions, setup instructions, and API usage must always stay current.
-15. **Small Modules and Functions**
-    Short, focused files and functions give higher ROI in maintenance — they are
-    easier to edit, review, and less prone to corruption.
-
-16. **RFC 9457 for API Errors**  
-    All API errors must follow RFC 9457 (`application/problem+json`). Use standard HTTP status codes, consistent error structures, and stable error types. Centralize error handling on both backend and frontend.
-
 17. **Workspace Cleanliness**  
     Before creating any file, ask: 1) Is there an exact place for this in the task or module architecture? 2) Is it needed for project operation and future maintenance? If both are no — write only to `.ai/tmp`.
 
-18. **Agent-First / API Parity Rule**
-    Every user-facing action must be accessible programmatically via an API, CLI, or callable function, sharing the same business logic as the UI. All filters, sorting, pagination, and search must be testable without browser automation. 
+
 
 
 

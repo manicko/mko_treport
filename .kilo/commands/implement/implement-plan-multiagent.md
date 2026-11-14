@@ -1,13 +1,13 @@
 ---
 name: implement-plan-multiagent
 
-description: Execute development plan incrementally using adaptive multi-agent workflow
+description: Execute development plan incrementally using adaptive multi-agent workflow for an Excel/VBA project
 
 alwaysApply: false
 
 ---
 
-# Task: Multi-Agent Plan Implementation
+# Task: Multi-Agent Plan Implementation (Excel/VBA)
 
 # Workflow
 Do not argue on the workflow, just follow.
@@ -17,16 +17,16 @@ If stop or break prefer resume old session not launching new agent.
 
 ## 0. Inspect relevant current architecture and implementation 
 
-Launch an `Auditor` to inspect the current codebase relevant to the plan.
+Launch an `Auditor` to inspect the current workbook/VBA implementation and related artifacts relevant to the plan.
 
 Provide:
 {plan_file} +
 <original_prompt>
 - What is already implemented
 - Whether the plan matches the current implementation
-- Relevant architecture, dependencies, and constraints
-- Important discrepancies or risks
-**Important: Never change any code or existing audit phase files.**
+- Relevant architecture, dependencies, and constraints (VBA modules `.bas`/`.cls`/`.frm`, Workbook/Worksheet code-behind, exported sources such as `mko_treport/src/vbs/export/`, `vbaProject.bin`, macros/controls/entry points, ListObjects/tables/settings, Power Query queries/connections, pivot tables/caches, and gitignored local artifacts like `data/theiss/*.xlsm/*.xlsx` or outputs when relevant)
+- Important discrepancies or risks (including VBA opacity/binary-vs-export drift, PQ/pivot behavior, Excel/Windows compatibility, and local-only artifact constraints)
+**Important: Never change any VBA/code or existing audit phase files.**
 Output as `{code_context}`.
 <original_prompt>
 
@@ -38,17 +38,17 @@ Provide:
 <original_prompt>
 - Decompose the plan into logical execution blocks
 - Identify dependencies and execution order
-- Assess implementation, rollout, regression, and compatibility risks
+- Assess implementation, rollout, regression, and compatibility risks (including Excel version/Windows environment, macro security, Power Query refresh timing, pivot/object-model behavior, workbook state/locking, and fidelity of outputs)
 - Identify multiple implementation paths alternatives when relevant, for maintainability, future evolution, and project conventions
 - **Not choose the final implementation approach when technical uncertainty exists**
 - Keep the scope minimal and avoid speculative redesign
 - For each block, determine whether the following agents are required:
   - **High risks** - all agents below 
-  - **Auditor** — deeper code/architecture investigation due to uncertainty or complexity
-  - **Researcher** — modern best practices, multiple viable approaches, architectural/support implications
-  - **Planner** — detailed pre-implementation design, architecture, testing, or complex execution
+  - **Auditor** — deeper VBA/workbook/architecture investigation due to uncertainty or complexity
+  - **Researcher** — modern/best practices, Excel/VBA/Power Query/pivot behavior, multiple viable approaches, support implications
+  - **Planner** — detailed pre-implementation design, workbook/module structure, validation, or complex execution
   - **Validator** — independent plan review when implementation risk is high
-**Important: Never change any code or existing audit phase files.**
+**Important: Never change any VBA/code or existing audit phase files.**
 <original_prompt>
 
 Save the result as `Execution plan`: `.ai\plans\{next-number}-{plan-name}.md`.
@@ -92,11 +92,11 @@ Launch `Auditor`  with:
 
 <original_prompt>
 Inspect the current implementation and architecture relevant to the block:
-* Code and architecture
+* VBA code and workbook architecture (modules, procedures, controls, ListObjects, PQ/pivots, connections)
 * Existing patterns and constraints
-* Current implementation
-* Risks
-**Important: Never change any code or existing audit phase files.**
+* Current implementation behavior and artifacts
+* Risks and compatibility concerns
+**Important: Never change any VBA/code or existing audit phase files.**
 Update `Execution plan` and Return `{context_a}`.
 <original_prompt>
 
@@ -108,12 +108,12 @@ Launch a `Researcher` with:
 
 <original_prompt>
 - Identify viable alternatives when relevant
-- Research the relevant modern practices 
+- Research the relevant modern/best practices for Excel VBA, Power Query, pivot/object-model behavior, and maintainability
 - Evaluate viable implementation approaches
 - Assess architectural, implementation, rollout, regression, and compatibility risks
 - Select the **best implementation path** for maintainability, future evolution, and project conventions
 - Avoid speculative redesign
-**Important: Never change any code or existing audit phase files.**
+**Important: Never change any VBA/code or existing audit phase files.**
 Update `Execution plan` and Return `{context_r}`.
 <original_prompt>
 
@@ -127,23 +127,22 @@ Launch a `Planner` with:
 <original_prompt>
 Create the implementation task for the `Implementor`.
 Use **semantic code units only**:
-- Files
-- Modules
-- Classes
-- Functions
-- Methods
-- Components
+- Files (e.g. `.bas`, `.cls`, `.frm`, workbook artifacts)
+- Standard Modules, Class Modules, and UserForms
+- Workbook/ThisWorkbook and Worksheet code-behind modules
+- Procedures (Sub/Function/Property)
+- Controls, ListObjects/tables, named ranges, and Power Query queries/connections where relevant
 
 **Never use line numbers.**
 
 Define:
 - Exact implementation scope
 - Implementation sequence
-- Architectural constraints
-- Required tests
-Tests should verify **logic and component interaction**, not trivial implementation details.
-- Use template `.ai\tasks\templates\task_template.yaml` to organize `{task_description}` in the `Execution plan`
-**Important: Never change any code or existing audit phase files.**
+- Architectural and workbook-state constraints
+- Required validation
+Validation should verify **logic and component interaction**, not trivial implementation details. Include VBA compile checks in the VBA IDE when feasible, deterministic in-Excel/manual verification steps, golden-output or structural workbook checks where available, and any existing automated harness/tests relevant to the changed scope.
+- Use template `.ai\tasks\templates\task_template.yaml` to organize `{task_description}` in the `Execution plan` if present; otherwise define `{task_description}` clearly in the plan
+**Important: Never change any VBA/code or existing audit phase files.**
 <original_prompt>
 
 Update `Execution plan` and Return `{task_description}`.
@@ -157,21 +156,21 @@ Launch one **`Implementor`** with the required context:
 <original_prompt>
 Implementor owns the local cycle:
 
-- Implementation
-- Required tests
-- Relevant tests, lint, and type checks
+- Implementation in versioned VBA sources (`.bas`/`.cls`/`.frm`) and related tracked artifacts as appropriate; keep exported VBA sources in sync with workbook behavior when feasible (e.g. `mko_treport/src/vbs/export/` and `mko_treport/src/vbs/vbaProject.bin` when applicable)
+- Do not commit gitignored local data/workbook/output artifacts (`data/theiss/*`, generated outputs) unless explicitly tracked; record controlled local changes/repro steps in plan/evidence notes when required
+- Required validation and relevant checks: VBA compile checks when feasible, deterministic in-Excel/manual verification for affected flows, and relevant automated checks for any non-VBA helper code touched (e.g. `uv run ruff check`/`uv run mypy`/`uv run pytest` for Python modules)
 - Fixing failures
-- Local validation
-- Commit only the current work item
+- Local validation against plan acceptance criteria and available golden/structural baselines
+- Commit only the current versioned work item
 ```bash
 git add <specific-files>
 git commit -m "{type}({scope}): {description}"
 ```
 
 You are working with other agents in parallel if you see changes not done by you - it is normal.
-Never ran `git reset`, `git checkout`
+Never run `git reset`, `git checkout`
 Never rewrite history.
-- Return only when locally validated and commit
+- Return only when locally validated and committed
 **Important: Never change plans or existing audit phase files.**
 <original_prompt>
 
@@ -187,9 +186,7 @@ Launch `Doc-specialist`.
 Ask it to update only the documentation affected by the implementation, following:
 
 <original_prompt>
-`mko_bazuna/docs/00-overview/doc-maintenance-rules.md`
-
-Do not introduce unrelated documentation changes.
+Project documentation conventions in `docs/` and `.ai/` (if present). Do not introduce unrelated documentation changes.
 
 Commit documentation changes separately.
 ```bash
@@ -197,9 +194,9 @@ git add <specific-files>
 git commit -m "{type}({scope}): {description}"
 ```
 You are working with other agents in parallel if you see changes not done by you - it is normal.
-Never ran `git reset`, `git checkout`
+Never run `git reset`, `git checkout`
 Never rewrite history.
-**Important: Never change any code or plans or existing audit phase files.**
+**Important: Never change any VBA/code or plans or existing audit phase files.**
 <original_prompt>
 ---
 
@@ -212,12 +209,12 @@ Check:
 
 * Plan completeness
 * Cross-block integration
-* Architectural consistency
+* Architectural and workbook/VBA consistency
 * Regressions
-* Tests and quality gates
+* Validation, tests, and quality gates (including VBA compile/manual/golden checks as applicable)
 * Documentation
 * Unrelated changes
-* Important: Never change any code or existing audit phase or plan files.
+* Important: Never change any VBA/code or existing audit phase or plan files.
 <original_prompt>
 
 ## 6. If issues are found:
@@ -230,20 +227,20 @@ Validate locally
 The Tech Lead is **orchestrator only**:
 - Coordinate agents
 - Do **not** rewrite, summarize, replace, weaken <original_prompt>
-- You may add relevant context, findings, decisions, risks, file/module information, or execution instructions 
-- If you need to study the code, you launch researchers or auditors agents. You do not study yourself.
+- You may add relevant context, findings, decisions, risks, file/module/workbook information, or execution instructions 
+- If you need to study the workbook/VBA implementation or artifacts, you launch researchers or auditors agents. You do not study yourself.
 
-The Tech Lead understand project rules and general architecture but never implements code.* 
+The Tech Lead understands project rules and general architecture but never implements code/VBA. 
 
 ---
 
 # Expected Result
 
-* Current implementation understood before execution planning
-* Plan decomposed into dependency-aware work blocks
+* Current workbook/VBA implementation and artifacts understood before execution planning
+* Plan decomposed into dependency-safe work blocks
 * Agent usage adapted to block complexity and risk
-* Each block implemented, locally validated, and committed separately
-* Documentation updated according to repository rules
+* Each block implemented, locally validated (with VBA-appropriate checks), and committed separately where versioned
+* Documentation updated according to repository conventions
 * Final validation passed
 * Architecture and project conventions preserved
 

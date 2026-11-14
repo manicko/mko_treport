@@ -1,256 +1,271 @@
-﻿# Analytical specification: treport (Excel macro reporting automation)
+# Analytical specification: treport (Excel macro reporting automation)
 
 - **Spec ID:** 001_treport
-- **Status:** Ready for implementation planning (business decisions confirmed; technical validations required — see Risks / Open technical validations)
-- **Date:** 2026-11-14
-- **Source request:** `docs/description.docx` (ТЗ “treport”)
+- **Status:** Ready for implementation planning, pending validation baseline (OQ-B7: target Excel/OS, representative data, golden output) and technical validations (§13)
+- **Date:** 2026-11-14 (rev. 4 — rev. 2 changes finalized; all clarification options resolved as recommended; added VBA-only implementation constraint)
+- **Source request:** `docs/description.docx` (ТЗ “treport”, revised 2026-11-14)
 - **Primary artifact in scope:** `data/theiss/treport.xlsm` (macro-enabled workbook, contains `xl/vbaProject.bin`; VBA source not present in repo)
-- **Related observed data/artifacts (evidence):** `data/theiss/base/` (`report_wclip.xlsx`, `CategoryData*.xlsx`, `clean_data/`, `raw_data/`, `dict/`), `data/theiss/monthly/` (`report_m.xlsx`), `data/theiss/weekly/` (`report_w.xlsx`); `mko_treport/src/{scripts,vbs,xls}` exist but are empty.
+- **Related observed data/artifacts (evidence):** data/theiss/base/ (eport_wclip.xlsx, CategoryData*.xlsx, clean_data/, aw_data/, dict/), data/theiss/monthly/ (eport_m.xlsx), data/theiss/weekly/ (eport_w.xlsx); mko_treport/src/{scripts,vbs,xls} exist but are empty.
+- **Implementation constraint (PO-confirmed):** Project must use **VBA only** (Excel VBA macros/modules in `treport.xlsm`). **No Python or any other programming/scripting language** may be used for implementation or automation.
 
-> This document specifies **what** must be built/achieved (business behavior and acceptance), not **how** to implement it in code/architecture beyond the constraints implied by the chosen product decisions and existing Excel/VBA artifact. Facts, assumptions, decisions, and open items are separated explicitly.
+> This document specifies **what** must be built/achieved (business behavior and acceptance), not **how** to implement it in code/architecture beyond constraints implied by confirmed product decisions and the existing Excel/VBA artifact. **Implementation is constrained to VBA only; Python and any other programming languages are not permitted.** **Facts, confirmed decisions, assumptions, and open technical validations are separated explicitly.**
 
 ## 1. Problem statement
 
-Reporting requires (1) refreshing source Excel data files that contain Power Query and/or pivot-table data and (2) producing periodical Excel report workbooks by extracting filtered pivot results with required formatting. Today this is intended to be performed by a macro in `treport.xlsm` driven by configuration tables, but the behavior must be unambiguously specified so implementation/refinement can proceed without further business analysis.
+Reporting requires (1) refreshing source Excel data files that contain Power Query and/or pivot-table data and (2) producing periodical Excel report workbooks by extracting filtered pivot results with required formatting. This is performed by a macro in `treport.xlsm` driven by configuration tables on the `settings` sheet.
 
-**Observed gap:** the ТЗ is partially ambiguous/truncated in places (e.g. copy-range research note, grouping-by-color detail, some formatting defaults and parameter descriptions), and the workbook contains parameters/values not fully described in the ТЗ (`new_file_delimeter`, `keep_col_hidden`, `paste_row/paste_col`, `group_rows`, placeholder descriptions, `report_week/year = last`). Repository evidence of internal VBA logic and full runtime behavior is limited (no exported VBA; binary inspection constraints). Business decisions below resolve the product ambiguities for specification purposes.
+**Revision context (2026-11-14):** filter logic and configuration were revised and are now finalized by PO decision:
+- `general`: `report_week`/`report_year` removed; `category_delimeter` renamed to `delimeter` (used in `reports` and `data_files`).
+- `reports`: filter columns renamed to `articleLevel4Name_clean`, `targetAudience` (aligned to data-file field names).
+- `data_files`: added `filters` column; period/field filtering is expressed per data-file row via a `filters` DSL with `min`/`max` tokens.
+- `placeholders`: renamed to `max_weeknum`, `max_monthnum`, `max_year` (derived from `filters`/data), substituted in `report_sheet` (e.g. `<max_weeknum>`, `<max_year>`).
+- PO confirmed all recommended clarifications for `filters` grammar/resolution, placeholder scope/format, filter placement/staging, and deterministic policies (OQ-1..OQ-4, OQ-B1, OQ-B3–OQ-B6). **OQ-B7** (target Excel/OS, representative data, golden output) remains required input for correctness sign-off; technical validations remain in §13.
+
+**Noted ТЗ wording issues (non-blocking, resolved by confirmed decisions):** revised ТЗ constraint text still mentions old field names `report_week\report_year\ category \ta`; a `Week Number=(1-max)|Years=max` example line appears duplicated. These are treated as stale/typo per OQ-1d and do not override confirmed semantics.
 
 ## 2. Goals and non-goals
 
 ### 2.1 Business goals
-- Enable a repeatable, configuration-driven run to **refresh data files** and **generate report workbooks** for a selected reporting period and audience/category filters.
-- Reduce manual effort and copy/paste errors; ensure deterministic outputs for the same resolved inputs/configuration.
-- Provide clear, actionable failure outcomes when required inputs/config/data are missing or invalid.
+- Enable a repeatable, configuration-driven run to **refresh data files** and **generate report workbooks** for the configured period/filters and audience/category selections.
+- Reduce manual effort and copy/paste errors; ensure deterministic outputs for the same resolved inputs/configuration and data state.
+- Provide clear, actionable failure outcomes when required inputs/config/data are missing, invalid, ambiguous, or yield no data.
 
-### 2.2 Non-goals (out of scope for this specification)
+### 2.2 Non-goals (out of scope)
 - Designing or changing system/software architecture beyond the agreed Excel-macro solution in `treport.xlsm`.
 - Implementing VBA/code, refactoring, or modifying repository files/data as part of this analysis.
-- Migrating to Python/CLI/services, changing data pipelines, or altering source data schemas/content.
-- Pixel-perfect parity with an unspecified historical output unless validated against an agreed golden output (see Definition of Ready).
-- Defining BI/business meaning of metrics/categories/TA beyond names/filters present in configuration and data.
+- Implementing or automating the solution in Python or any other programming/scripting language (VBA only is permitted).
+- Pixel-perfect parity with an unspecified historical output unless validated against an agreed golden output (OQ-B7).
+- Defining BI/business meaning of metrics/categories/TA/field semantics beyond names and filter expressions present in configuration and data.
 
 ## 3. Confirmed facts (evidence-based)
 
 | Area | Confirmed fact | Evidence |
 |---|---|---|
-| Request source | ТЗ describes `treport.xlsm` macro with `settings`/`run`, tables `general,reports,data_files,placeholders`, buttons `Refresh_data`/`Create_report`, workflows, constraints. | `docs/description.docx` (extracted text) |
-| Workbook container | `treport.xlsm` exists; contains sheets `run`, `settings`; 4 table parts; drawings/vml/control props; `xl/vbaProject.bin` present. | `data/theiss/treport.xlsm`; `xl/workbook.xml`, `xl/worksheets/sheet1.xml`, `xl/worksheets/sheet2.xml`, `xl/tables/table1-4.xml`, package parts listing |
-| Config tables (structure) | `general(parameter,value)`; `reports(category,ta,name)`; `placeholders(placeholder,description)`; `data_files(data_file,data_sheet,report_sheet,paste_row,paste_col,freeze_row,freeze_col,zoom,group_rows)`. | `xl/tables/table1.xml`–`table4.xml` |
-| Config snapshot (workbook) | `general`: `input_path` = workbook folder formula, `output_path` = `B2&"output"`, `category_delimeter` = `&`, `report_week` = `last`, `report_year` = `last`, plus `new_file_delimeter`, `keep_col_hidden` (TRUE/FALSE). `reports`: 6 rows (e.g. `ЗУБНАЯ ПАСТА&ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` / `W 50+` / `LACALUT ACTIV`, etc.). `data_files`: 3 rows — `report_m`/`clean_data_full`/`помесячное сравнение`, `report_w`/`clean_data_full`/`сравн конкур_<weeknum>w_<year>_прямая` (group_rows TRUE), `report_wclip`/`clean_data_full`/`хроно по неделям`. `placeholders`: `weeknum`, `monthnum`, `year` with descriptions. | `xl/worksheets/sheet2.xml`, `xl/sharedStrings.xml` |
-| Data artifacts present | Candidate files by base name exist: `data/theiss/monthly/report_m.xlsx`, `data/theiss/weekly/report_w.xlsx`, `data/theiss/base/report_wclip.xlsx` (unique by exact name in observed locations). No `data/theiss/output` folder observed. | Directory listings / repo scan |
-| Source workbook indicators | Inspected candidate xlsx files contain pivot cache/table, connections/query-table and customXml indicators (complexity varies; e.g. `report_wclip` heavier). Exact pivot fields/schemas not fully extracted. | Package part-name inspection (research) |
-| Repo state | No exported VBA modules; `mko_treport/src/{scripts,vbs,xls}` empty; `data/*` git-ignored. | Repo scan, `.gitignore` |
+| Revised ТЗ | Describes `settings`/`run`, tables `general,reports,data_files,placeholders`; `delimeter` in `general` used in `reports` and `data_files`; `reports` columns `articleLevel4Name_clean`, `targetAudience`, `name`; `data_files` includes `filters`; workflow applies data-file-level filters (`data_files.filters`) then report-level filters (`reports`); placeholders usable in `data_files` for substitution. States `data_files` read-only mode (see Q1 resolution) and `Refresh_data` refreshes PQ/RefreshAll and saves. | `docs/description.docx` (extracted, rev. 2) |
+| `filters` principle (ТЗ) | `<имя поля> = значение или (диапазон значений) или (значение 1 <разделитель> значение 2) | <имя поля 2> =....` Examples: `Month Number=(1-max)|Years=max`, `Week Number=(1-max)|Years=max`. `max` — maximum, `min` — minimum. | `docs/description.docx` (rev. 2) |
+| Workbook container | `treport.xlsm` exists; sheets `run` (`Sheet2`), `settings` (`Sheet1`); 4 table parts; drawings/vml/control props; `xl/vbaProject.bin` present. | `data/theiss/treport.xlsm`; `xl/workbook.xml`, `xl/worksheets/*`, package parts |
+| `general` table | ListObject `general` (`A1:B4`, `parameter,value`): `input_path` = workbook folder formula, `output_path` = `B2&"output"`, `delimeter` = `&`. (`report_week`, `report_year`, `category_delimeter`, `new_file_delimeter`, `keep_col_hidden` not present.) | `xl/tables/table1.xml`, `xl/worksheets/sheet2.xml`, `xl/sharedStrings.xml` |
+| `reports` table | ListObject `reports` (`D1:F7`, `articleLevel4Name_clean,targetAudience,name`), 6 rows: (`ЗУБНАЯ ПАСТА&ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ`,`W 50+`,`LACALUT ACTIV`), (`ЗУБНАЯ ПАСТА&ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ`,`W 30-50`,`LACALUT ACTIV MEDICAL WHITE`), (`СРЕДСТВА ОТ БОЛИ В МЫШЦАХ И СУСТАВАХ`,`W 50+`,`DOLGIT`), (`СРЕДСТВА ОТ БОЛИ В МЫШЦАХ И СУСТАВАХ`,`W 30-50`,`DOLGIT `), (`СРЕДСТВА ОТ КАШЛЯ`,`W 30-50`,`HEDELIX`), (`СЛАБИТЕЛЬНЫЕ ПРЕПАРАТЫ`,`W 50+`,`REGULAX`). | `xl/tables/table2.xml`, sheet2/sharedStrings |
+| `data_files` table | ListObject `data_files` (`D10:M13`, `data_file,data_sheet,report_sheet,filters,paste_row,paste_col,freeze_row,freeze_col,zoom,group_rows`), 3 rows: `report_m`/`clean_data_full`/`помесячное сравнение`/`Month Number=(1-max)|Years=max`/1,1,blank,blank,0.7,TRUE; `report_w`/`clean_data_full`/`сравн конкур_<max_weeknum>w_<max_year>_прямая`/`Week Number=(1-max)|Years=max`/1,1,2,2,blank,blank; `report_wclip`/`clean_data_full`/`хроно по неделям`/`Week Number=(1-max)|Years=max`/1,1,blank,blank,blank,blank. | `xl/tables/table4.xml`, sheet2/sharedStrings |
+| `placeholders` table | ListObject `placeholders` (`A10:B13`, `placeholder,description`): `max_weeknum` — “неделя отчета рассчитывается на основе filters в data_file”; `max_monthnum` — “месяц  отчета рассчитывается на основе filters и данных в data_file”; `max_year` — “год отчета рассчитывается на основе filters и данных в data_file”. | `xl/tables/table3.xml`, sheet2/sharedStrings |
+| Data artifacts | Candidate files exist: `data/theiss/monthly/report_m.xlsx`, `data/theiss/weekly/report_w.xlsx`, `data/theiss/base/report_wclip.xlsx` (unique by observed exact name). No `data/theiss/output` folder observed. Candidate xlsx packages show pivot/connection/query indicators; field-level schemas/captions not fully extracted. | Directory listings / package inspection |
+| Repo state | No exported VBA modules; `mko_treport/src/{scripts,vbs,xls}` empty; `data/*` git-ignored. | Repo scan |
 
 ## 4. Scope
 
 ### 4.1 In scope
-1. **Configuration reading & validation** from `treport.xlsm` `settings` sheet ListObjects: `general`, `reports`, `data_files`, `placeholders` (including parameters present in workbook; unspecified extras must be handled deterministically per decisions).
-2. **`Refresh_data`** operation: locate configured data files in `input_path`, refresh their Power Query/pivot data as required, persist refreshed data, and report outcome.
-3. **`Create_report`** operation: resolve reporting period/filters, create/overwrite output report workbooks per `reports`, generate sheets in `data_files` order from filtered pivot data, apply required formatting/placement/naming, save outputs, and report outcome.
-4. **Deterministic rules** for file resolution, “last” period resolution, filter semantics/placement, multi-value matching, copy range, placeholders/naming, idempotent overwrite, and fail-fast error behavior as specified below.
-5. **Operational/user-visible outcomes**: clear success/failure messaging sufficient to identify the failing file/sheet/field/config element (conceptual requirement).
+1. **Configuration reading & validation** from `treport.xlsm` `settings` ListObjects `general`, `reports`, `data_files`, `placeholders` per revised schema and confirmed rules.
+2. **`Refresh_data`**: locate configured data files in `input_path`, refresh Power Query/pivot data as required, persist refreshed data, and report outcome.
+3. **`Create_report`**: per `data_files` row (in order), open source, resolve `filters`/`min`/`max` and placeholders deterministically, apply `data_files.filters` (data-file level) then per-`reports` filters (`articleLevel4Name_clean`, `targetAudience`) with confirmed placement/staging; generate output workbooks/sheets per `reports` and `data_files` order with required copy/format/naming; save outputs and report outcome.
+4. **Deterministic rules** for file resolution, `filters` grammar/interpretation, `min`/`max` resolution, multi-value matching via `general.delimeter`, copy range, placeholder substitution/naming, idempotent overwrite, and fail-fast error behavior.
+5. **Operational/user-visible outcomes**: clear success/failure messaging sufficient to identify failing operation, config row/name, file path, sheet, field, filter/expression, or value.
 
 ### 4.2 Out of scope
 - Any non-Excel runtime, scheduler/orchestrator, UI redesign, or changes to source data content/pipelines.
-- Recovery/merge of concurrent edits, multi-user locking workflows beyond deterministic failure on locked resources.
-- Historical-data correction, metric definition changes, or new report types not representable by existing config model (unless separately requested).
+- Any implementation or automation using Python or any programming/scripting language other than VBA.
+- Recovery/merge of concurrent edits or multi-user locking workflows beyond deterministic failure on locked/unavailable resources.
+- Historical-data correction, metric definition changes, or new report types not representable by existing config model.
+- Defining BI/business meaning of metrics/categories/TA/field semantics beyond configured names and filter expressions.
+- `group_rows` color-band grouping behavior until an explicit deterministic rule is approved (see D11).
 
 ## 5. Constraints
 
-- **Artifact/architecture constraint:** Solution operates within the existing `treport.xlsm` Excel-macro model and configured `settings`/`run`/ListObjects.
-- **Access modes (PO-confirmed):** `Create_report` — data files opened **read-only, never saved**. `Refresh_data` — data files opened **writable (not read-only)** to refresh and **save**, then closed. (Resolves ТЗ conflict in favor of a mode-specific policy.)
-- **Processing order:** `data_files` rows processed in configured order; output sheets created in the same order.
-- **Filter placement:** if a filter field already exists in Filters/Rows/Columns, filter it in place without moving it; if absent, add to Filters and filter there.
-- **No invention:** unspecified business meanings must not be fabricated; unresolved technical feasibilities are recorded as validations/risks, not assumed behavior.
+- **Artifact/architecture:** Solution operates within the existing 	report.xlsm Excel-macro model and configured settings/un/ListObjects.
+- **Implementation language (project constraint):** The project must use **VBA only** (Excel VBA macros/modules within `treport.xlsm`). **No Python or any other programming or scripting language** may be used to implement or automate Refresh_data, Create_report, or any related logic.
+- **Access modes (D1):** `Create_report` — data files opened **read-only, never saved**. `Refresh_data` — data files opened **writable (not read-only)** to refresh PQ/RefreshAll and **save**, then closed.
+- **Processing order:** `data_files` rows processed in configured order; output sheets follow `data_files` order.
+- **Filter placement (D7):** for every filter field applied (all fields in `data_files.filters` and `reports.articleLevel4Name_clean`, `reports.targetAudience`), if the field already exists in Filters/Rows/Columns filter it in place without moving it; if absent, add to Filters and filter there.
+- **Filter staging (D8):** for each `data_file`, apply `data_files.filters` once and keep them applied; for each `reports` row apply/reapply that row’s `articleLevel4Name_clean` and `targetAudience` (overriding prior report-row selection for those fields) without moving placed fields; one report row’s report-level filters must not leak into another.
+- **No invention:** unspecified semantics must not be fabricated; unresolved technical validations are recorded in §13.
 - **Determinism:** identical resolved inputs/config/data state must yield deterministic resolution, naming, and structure.
 
-## 6. Product Owner decisions (confirmed — all recommended)
+## 6. Confirmed product decisions (PO: all recommended, 2026-11-14)
 
-| ID | Decision area | Confirmed choice (recommended) |
+| ID | Decision | Confirmed choice |
 |---|---|---|
-| Q1 | Read-only vs refresh-save | `Create_report`: read-only, never save data files. `Refresh_data`: writable open to refresh PQ/RefreshAll and save, then close (only mutating operation on data files). |
-| Q2 | `report_week`/`report_year = "last"` | Resolve from **actual data** in relevant `data_file/data_sheet`: `report_year` = maximum available year; `report_week` = maximum available week within that resolved year. Resolution must be **deterministic** when multiple data files differ. |
-| Q3 | Week boundary | Include weeks **<= `report_week`** and exclude weeks **> `report_week`** within selected `report_year` (`report_week` included). |
-| Q4 | Data file name resolution | `data_file` is base name; match `<data_file>.<supported_ext>` (supported extensions explicitly listed, e.g. `.xlsx/.xlsm/.xlsb`) with a **defined precedence**; **error** if none or if more than one match. |
-| Q5 | Output/overwrite/idempotency | One output workbook per `reports` row, name `reports.name` (+ `.xlsx` unless otherwise specified). If target exists, **overwrite** on successful run. Sheets created in `data_files` order; target sheets **recreated/replaced** for idempotency. |
-| Q6 | Multi-value filter matching | `category` may contain multiple values separated by `general.category_delimeter`; select **all listed** matching items. Matching is **exact** to pivot item captions after trimming whitespace. `ta` is treated as a filter field per config with the same matching/placement principles. |
-| Q7 | Copied data range | Copy pivot’s presented data range including **row/column labels and grand totals** as shown after filtering; **exclude** pivot object/page-filter area and any PQ connections. Paste **values + formats** (and column widths if needed) as static content. |
-| Q8 | Errors / empty filter result | **Fail fast** with a clear, contextual error for: missing/invalid config or required paths, missing/unresolvable data file, missing `data_sheet`, missing pivot table, or missing required filter field. A filter yielding **no data** must produce an **explicit, defined outcome** (policy fixed at implementation/spec sign-off: fail-fast preferred for correctness, or an explicit marked-empty sheet — must be deterministic and documented). |
-| Q9 | Formatting & extra params | Blanks = default/no-op for `freeze_row/freeze_col/zoom/paste_row/paste_col/group_rows`. `group_rows=TRUE` requires a **deterministic** rule (color-band grouping “от белого в центре” is ambiguous and must be explicitly defined before relied upon). Extra workbook params not specified in ТЗ (`new_file_delimeter`, `keep_col_hidden`) must be **explicitly specified or explicitly ignored** with deterministic behavior. |
-| Q10 | Placeholders & naming | `weeknum`, `monthnum`, `year` resolved from the resolved report period and substituted at least in `report_sheet`. Handle invalid Excel sheet-name characters, **31-char** limit, and collisions **deterministically**. Token syntax/formatting must be explicit and consistent. |
-| Q11 | Scope/source of truth | Behavior aligned to **ТЗ intent** reconciled with **current workbook structure** (actual table columns/rows/params included once confirmed). Both `Create_report` and `Refresh_data` are in scope. |
-| Q12 | Acceptance context | Validation requires target Excel/OS context and, for correctness sign-off, representative `input_path` data plus at least one **golden** expected output for a fixed `report_week/report_year` (filters/values/formatting). Structural-only acceptance is insufficient for correctness claims. |
+| D1 (Q1) | Access modes | `Create_report`: data files read-only, never saved. `Refresh_data`: data files writable (not read-only) to refresh PQ/RefreshAll and save, then close. |
+| D2 (Q4, OQ-B3) | Data-file resolution | `data_file` is base name resolved in `input_path` to `<data_file>.<ext>` with fixed precedence **`.xlsx`, `.xlsm`, `.xlsb`**; **fail fast** if no match or >1 match. |
+| D3 (Q5) | Outputs & idempotency | One output workbook per `reports` row named `reports.name` + `.xlsx`; overwrite if exists on successful run; sheets created in `data_files` order and recreated/replaced deterministically for idempotent reruns. |
+| D4 (rev. 2, OQ-4) | Filter responsibilities | `data_files.filters` contains period/data fields (e.g. `Years`, `Week Number`, `Month Number`) as configured; `articleLevel4Name_clean` and `targetAudience` are controlled via `reports` table. |
+| D5 (OQ-1a) | `filters` grammar | Clauses separated by `|`; each `<field> = <expr>` (spaces around `=`, `|` trimmed; field names may contain spaces). `<expr>`: (i) **scalar** — literal or `min`/`max` (e.g. `Years=max`); (ii) **range** — `(start-end)` **inclusive**, operands are numeric literals or `min`/`max`, `-` is range operator (e.g. `(1-max)`, `(1-12)`); (iii) **list** — `(v1<delimeter>v2…)` using `general.delimeter` (`&`). Field and literal values match pivot field/item captions **exactly after trim**. Disambiguation: expression containing `general.delimeter` → list; else containing `-` between two bound tokens → range; else scalar. Multi-value lists in `filters` use `general.delimeter`. |
+| D6 (OQ-1d) | ТЗ duplicate example | Duplicated `Week Number=(1-max)|Years=max` example line treated as typo/ignored. |
+| D7 (OQ-1b, Q6 placement) | Placement rule scope | Applies to **all** filter fields: every field in `data_files.filters` and `reports.articleLevel4Name_clean`, `reports.targetAudience`. Filter in place if in Filters/Rows/Columns, else add to Filters (no move). |
+| D8 (OQ-1c) | Filter staging/reset | Per `data_file`: apply `data_files.filters` once and keep applied; per `reports` row apply/reapply that row’s `articleLevel4Name_clean` and `targetAudience` (override prior report-row selection for those fields) without moving placed fields; no leak between report rows. |
+| D9 (Q6, OQ-1a) | Value matching | Multi-value selection split by `general.delimeter`, tokens trimmed, all exactly matching pivot items selected (exact to captions after trim). Applies to `articleLevel4Name_clean` and any list expressions in `filters`; `targetAudience` applied per configured value with same exact/trim matching principle. |
+| D10 (OQ-2a, OQ-2c; supersedes Q2/Q3) | `min`/`max` resolution & bounds | Per `data_files` row, resolve against available values of referenced fields in the pivot on `data_sheet` of that `data_file` (actual data). Resolution is deterministic and dependency-aware: when `Years` is present, resolve `Years` bound first (e.g. `Years=max` → max year in data), then resolve dependent period fields within that resolved `Years` context (e.g. `Month Number` `min/max` = min/max month available in resolved year; `Week Number` `min/max` = min/max week available in resolved year). Ranges are **inclusive** on both ends; comparisons are **numeric**. |
+| D11 (OQ-2b, OQ-3a, OQ-3b) | `max_*` placeholders | `max_year` = resolved max of `Years`; `max_weeknum` = resolved max of `Week Number`; `max_monthnum` = resolved max of `Month Number` for that `data_files` row in the same resolved context. Substitution target: **`report_sheet` only**. Token syntax `<name>` as in workbook (`<max_weeknum>`, `<max_monthnum>`, `<max_year>`), substituted as resolved values **without zero-padding**. If a placeholder is **referenced** but its corresponding value cannot be deterministically derived for that row, **fail fast** with a clear config/data error. |
+| D12 (Q8, OQ-B4) | Errors & no-data | **Fail fast** with clear contextual error for missing/invalid config or paths, missing/unresolvable data file, missing `data_sheet`, missing pivot, missing required filter field, invalid/unparseable/unresolvable `filters`, or referenced-but-underivable placeholder. Filter yielding **no data** → **fail fast** with contextual error (file/sheet/filters/report). |
+| D13 (Q9, OQ-B5) | Formatting defaults & `group_rows` | Blanks = default/no-op for `freeze_row/freeze_col/zoom/paste_row/paste_col/group_rows`. `group_rows` has no approved deterministic color-band rule; therefore **`group_rows=TRUE` must fail fast** with a clear error until an explicit deterministic rule is approved. Blank/false = no-op. (Current workbook config must be brought into compliance before acceptance — noted as config/validation issue.) |
+| D14 (Q10, OQ-B6) | Naming & collisions | Sanitize Excel-invalid sheet-name characters, enforce **31-character** limit, resolve collisions deterministically: **fail fast** on sheet-name or report-file-name collision after substitution/sanitization. |
+| D15 (Q7) | Copy range | Copy pivot presented data range incl. row/column labels and grand totals as shown after filtering; exclude pivot object/page-filter area and PQ connections; paste static **values + formats** (+ column widths if needed). |
+| D16 (Q11) | Scope/source of truth & language | **VBA-only** solution in `treport.xlsm` (Excel VBA macros/modules); **no Python or any other programming/scripting language**. Behavior aligned to revised ТЗ intent reconciled with current workbook structure; `Refresh_data` and `Create_report` in scope. |
+| D17 (OQ-B1) | Removed parameters | `new_file_delimeter` and `keep_col_hidden` are dropped (absent in rev. 2) and must not be required/processed. |
+| D18 (Q12, OQ-B7) | Acceptance baseline | Correctness sign-off requires target Excel/OS context, representative `input_path` dataset, and ≥1 golden expected output for a fixed configuration/period (baseline details to be provided). |
 
 ## 7. Confirmed functional requirements
 
 ### 7.1 Configuration model (FR-CFG)
 - **FR-CFG-1:** Read settings from ListObjects `general`, `reports`, `data_files`, `placeholders` on the `settings` sheet of `treport.xlsm`.
-- **FR-CFG-2:** `general` provides at minimum: `input_path`, `output_path`, `category_delimeter`, `report_week`, `report_year`. `input_path` and `output_path` are mandatory and non-empty; missing/empty required values cause a clear validation error.
-- **FR-CFG-3:** `reports` defines report generation rows with at least `category`, `ta`, `name` (one output workbook per row per Q5/Q11).
-- **FR-CFG-4:** `data_files` defines ordered source-processing rows with at least `data_file`, `data_sheet`, `report_sheet` and formatting/placement fields (`paste_row`, `paste_col`, `freeze_row`, `freeze_col`, `zoom`, `group_rows`) as present in workbook; row order is authoritative for processing/sheet order.
-- **FR-CFG-5:** `placeholders` defines available substitution parameters (at least `weeknum`, `monthnum`, `year`) and their meaning; resolution follows Q10/Q2.
-- **FR-CFG-6:** Workbook parameters not described in ТЗ (`new_file_delimeter`, `keep_col_hidden`) and any blank optional fields must follow a documented deterministic policy (use, ignore, or reject) — see Open items/Risks; silent undefined behavior is not acceptable.
+- **FR-CFG-2:** `general` provides `input_path`, `output_path`, `delimeter`. `input_path` and `output_path` are mandatory and non-empty; `delimeter` is mandatory when multi-value splitting is required by config. Missing/empty/invalid required values → fail-fast validation error (D12).
+- **FR-CFG-3:** `reports` defines report rows with columns `articleLevel4Name_clean`, `targetAudience`, `name` (one output workbook per row) (D3, D16).
+- **FR-CFG-4:** `data_files` defines ordered source-processing rows with columns `data_file`, `data_sheet`, `report_sheet`, `filters`, `paste_row`, `paste_col`, `freeze_row`, `freeze_col`, `zoom`, `group_rows`; row order is authoritative for processing and output sheet order (D3, D8).
+- **FR-CFG-5:** `placeholders` defines substitution parameters `max_weeknum`, `max_monthnum`, `max_year` with derivation basis per D11.
+- **FR-CFG-6:** Blank optional fields follow default/no-op where defined (D13). Dropped parameters (`new_file_delimeter`, `keep_col_hidden`) must not be required/processed (D17). Invalid/unsupported/unresolvable expressions or values must not fail silently → fail fast per D12.
 
 ### 7.2 File resolution and access (FR-FILE)
-- **FR-FILE-1:** Resolve each `data_files.data_file` (base name) within `general.input_path` to `<data_file>.<supported_ext>` using a defined extension set and precedence (Q4). Case-insensitive matching is acceptable on Windows but outcome must be deterministic.
-- **FR-FILE-2:** If no match or more than one match exists for a configured data file, fail fast with an error listing the configured name, searched path, and cause (Q4/Q8).
-- **FR-FILE-3:** `Create_report` opens data files read-only and never saves them (Q1).
-- **FR-FILE-4:** `Refresh_data` opens data files writable (not read-only), performs refresh, saves, and closes (Q1). File/lock unavailability must result in a clear failure.
-- **FR-FILE-5:** Ensure `output_path` exists (create if missing, per ТЗ intent) before writing outputs; inability to create/write fails fast (Q8).
+- **FR-FILE-1:** Resolve each `data_files.data_file` (base name) within `general.input_path` to `<data_file>.<ext>` checking extensions in fixed precedence **`.xlsx`, `.xlsm`, `.xlsb`** (D2). Outcome must be deterministic.
+- **FR-FILE-2:** If no match or more than one match exists, fail fast with an error listing configured name, searched path, and cause (D2, D12).
+- **FR-FILE-3:** `Create_report` opens data files read-only and never saves them (D1).
+- **FR-FILE-4:** `Refresh_data` opens data files writable (not read-only), performs refresh, saves, and closes (D1). Unavailability/lock is a clear fail-fast error (D12).
+- **FR-FILE-5:** Ensure `output_path` exists (create if missing) before writing outputs; inability to create/write fails fast (D12).
 
 ### 7.3 Refresh operation (FR-REF)
-- **FR-REF-1:** For each resolved data file (in deterministic order), open, refresh Power Query and dependent pivot data so refreshed results are persisted, save, and close (Q1).
-- **FR-REF-2:** Refresh must complete before save/close; asynchronous/background refresh states must not leave persisted data stale (technical validation required).
-- **FR-REF-3:** On per-file refresh failure, fail fast with a clear error identifying the file and stage (Q8); application/workbook state must not be left corrupted by the run.
+- **FR-REF-1:** For each resolved data file (deterministic order), open writable, refresh Power Query and dependent pivot data so results are persisted, save, and close (D1).
+- **FR-REF-2:** Refresh must complete before save/close; asynchronous/background refresh must not leave persisted data stale (technical validation §13, OQ-T2).
+- **FR-REF-3:** On refresh failure, fail fast with contextual error (file, stage); do not leave application/workbook state corrupted (D12).
 
-### 7.4 Period and filter resolution (FR-FLT)
-- **FR-FLT-1:** Resolve `report_year` and `report_week` from `general`: explicit values used as provided; value `last` resolved from actual data in relevant `data_file/data_sheet` as `max(year)` and `max(week)` within that year, deterministically across data files (Q2). Resolved values are the reporting period for the run and for placeholder substitution.
-- **FR-FLT-2:** Apply period filter as **<= `report_week` included, > `report_week` excluded** within selected `report_year` (Q3).
-- **FR-FLT-3:** Apply `category` and `ta` filters from `reports` rows as configured. Multi-value `category` is split by `category_delimeter`, tokens trimmed, and all exactly matching pivot items selected (Q6). `ta` follows configured field/matching semantics.
-- **FR-FLT-4:** Respect filter placement: filter in place if the field is already in Filters/Rows/Columns; if absent, add to Filters then filter (ТЗ/Q6). Do not move fields that are already placed.
-- **FR-FLT-5:** Missing `data_sheet`, missing pivot, or missing required filter field is a fail-fast error with context (Q8). Filter resulting in no data yields the defined explicit outcome (Q8, deterministic).
+### 7.4 Filter parsing, resolution, and application (FR-FLT)
+- **FR-FLT-1 (parse `filters`):** For each `data_files` row, parse `filters` per D5: clauses separated by `|`; each `<field> = <expr>` (trim spaces around `=`, `|`; field names may contain spaces). `<expr>` is scalar (literal or `min`/`max`), inclusive range `(start-end)` with numeric/`min`/`max` bounds and `-` operator, or list `(v1<delimeter>v2…)` using `general.delimeter`. Disambiguation: contains `general.delimeter` → list; else contains `-` between two bound tokens → range; else scalar. Empty/invalid/unparseable expression or duplicate/ambiguous clause → fail fast (D12).
+- **FR-FLT-2 (resolve `min`/`max`):** Per D10, for each `data_files` row resolve `min`/`max` against available values of referenced fields in the pivot on `data_sheet` of that `data_file` (actual data). Deterministic, dependency-aware: resolve `Years` bound first when present, then resolve dependent period fields within that resolved `Years` context (e.g. `Month Number` and/or `Week Number` `min/max` within resolved year). Ranges inclusive on both ends; comparisons numeric. Unresolvable bound/value → fail fast (D12).
+- **FR-FLT-3 (resolve placeholders):** Per D11, derive `max_year`/`max_weeknum`/`max_monthnum` as resolved maxima of `Years`/`Week Number`/`Month Number` in the same resolved context for that `data_files` row. If a placeholder is referenced in `report_sheet` but cannot be deterministically derived → fail fast (D12).
+- **FR-FLT-4 (apply data-file filters):** For each `data_file`, apply resolved `data_files.filters` once to the pivot on `data_sheet` and keep applied for all `reports` rows processed against that `data_file` (D8). `data_files.filters` contains period/data fields as configured (D4).
+- **FR-FLT-5 (apply report filters):** For each `reports` row, apply `articleLevel4Name_clean` and `targetAudience`. Multi-value `articleLevel4Name_clean` split by `general.delimeter`, tokens trimmed, all exactly matching pivot items selected (D9). `targetAudience` applied per configured value with exact-after-trim matching. Report-level filters are reapplied per report row (override prior report-row selection for those fields) without leaking between report rows (D8).
+- **FR-FLT-6 (placement):** For every filter field applied (all `data_files.filters` fields and `articleLevel4Name_clean`, `targetAudience`), if field exists in Filters/Rows/Columns filter in place without moving it; if absent, add to Filters and filter there (D7).
+- **FR-FLT-7 (field identity & outcomes):** Filter field names and literal values must correspond/match pivot field and item captions exactly after trim (D5, D9). Missing `data_sheet`, missing pivot, missing required filter field, or unresolvable expression/value → fail fast with context (D12). Filter yielding **no data** → fail fast with contextual error (D12).
 
 ### 7.5 Report generation and output (FR-RPT)
-- **FR-RPT-1:** Create one output workbook per `reports` row named `reports.name` (+ `.xlsx` unless specified). If it exists, overwrite on successful run (Q5). Overwrite/locking failures are clear errors (Q8).
-- **FR-RPT-2:** For each data file in `data_files` order, create a target sheet in each relevant report workbook named from `report_sheet` after placeholder substitution (Q10), placed/ordered according to `data_files` sequence. For idempotent reruns, target sheets are recreated/replaced deterministically (Q5).
-- **FR-RPT-3:** Determine the copy range from the pivot’s presented data after filtering: include row/column labels and grand totals as shown; exclude the pivot object/page-filter area and PQ connections (Q7).
-- **FR-RPT-4:** Paste into the target sheet at `paste_row/paste_col` (blank = default per Q9) as static **values + formats** (and column widths if needed). Output must not contain pivot objects or PQ connections from the source.
-- **FR-RPT-5:** Apply formatting per `data_files`: freeze panes (`freeze_row/freeze_col`), zoom, hide gridlines, and row/column sizing/state as required by ТЗ; blanks are no-op/default (Q9).
-- **FR-RPT-6:** `group_rows=TRUE` must apply a deterministic grouping/outline rule. Because color-band grouping (“от белого в центре”) is not fully defined, a specific, approved rule is required before this behavior can be accepted as correct (Q9) — see Open items.
-- **FR-RPT-7:** Save each report workbook to `output_path` and release resources; opened source files must be closed according to mode (Q1).
+- **FR-RPT-1:** Create one output workbook per `reports` row named `reports.name` + `.xlsx`. If exists, overwrite on successful run. Lock/overwrite failures → fail fast (D3, D12).
+- **FR-RPT-2:** For each `data_files` row in order, create a target sheet in each relevant report workbook named from `report_sheet` after placeholder substitution, in `data_files` order. For idempotency, target sheets are recreated/replaced deterministically (D3, D11).
+- **FR-RPT-3:** Copy range = pivot’s presented data after all applicable filters: include row/column labels and grand totals as shown; exclude pivot object/page-filter area and PQ connections (D15).
+- **FR-RPT-4:** Paste at `paste_row/paste_col` (blank = default/no-op per D13) as static **values + formats** (+ column widths if needed). Output must not contain pivot objects or PQ connections (D15).
+- **FR-RPT-5:** Apply formatting per `data_files`: freeze panes (`freeze_row/freeze_col`), zoom, hide gridlines, and row/column sizing/state as required; blanks are no-op/default (D13).
+- **FR-RPT-6:** `group_rows=TRUE` → **fail fast** with clear error until an explicit deterministic rule is approved; blank/false = no-op (D13).
+- **FR-RPT-7:** Save each report workbook to `output_path` and release resources; close source files per access-mode rules (D1).
 
 ### 7.6 Naming and placeholders (FR-NAME)
-- **FR-NAME-1:** Resolve `year`, `weeknum`, `monthnum` from the resolved report period and substitute into `report_sheet` (at minimum) per Q10. `monthnum` derivation must follow an explicit defined rule (see Open items).
-- **FR-NAME-2:** Final sheet/report names must be sanitized for Excel invalid characters, limited to 31 characters, and collisions resolved by a deterministic, documented policy (Q10). Empty/invalid resulting names are errors.
+- **FR-NAME-1:** Substitute placeholders in `report_sheet` only (D11). Token syntax `<max_weeknum>`, `<max_monthnum>`, `<max_year>`; values are resolved per D10/D11 and inserted without zero-padding.
+- **FR-NAME-2:** Sanitize final sheet/report names for Excel-invalid characters, enforce **31-character** limit, and **fail fast** on collision after substitution/sanitization (D14). Empty/invalid resulting names → fail fast (D12).
 
 ### 7.7 Run behavior and diagnostics (FR-RUN)
-- **FR-RUN-1:** `Refresh_data` and `Create_report` are invokable from `run` sheet controls as provided by the workbook.
-- **FR-RUN-2:** Runs execute without unnecessary UI disruption and restore application state on completion/failure (quality requirement).
-- **FR-RUN-3:** Success and failure outcomes are explicit. Errors are fail-fast and identify context (operation, configured row/name, file path, sheet, field/pivot/filter/value as applicable) per Q8.
+- **FR-RUN-1:** `Refresh_data` and `Create_report` invokable from `run` sheet controls as provided.
+- **FR-RUN-2:** Execute without unnecessary UI disruption and restore application state on completion/failure.
+- **FR-RUN-3:** Success and failure outcomes explicit. All errors fail fast and identify context (operation, config row/name, file path, sheet, field, filter/expression, value as applicable) (D12).
 
 ## 8. Conceptual development tasks (for planning decomposition)
 
 | ID | Task | Purpose | Expected outcome | Dependencies |
 |---|---|---|---|---|
-| T1 | Config contract & validation | Finalize meaning/defaults/validation of all config fields (incl. workbook extras). | Documented config schema and validation/error matrix. | PO decisions; confirm extra-param policy |
-| T2 | Data-file resolution & access policy | Deterministic path/extension resolution and mode-specific open/close/save behavior. | Resolution rules + access-mode rules per operation. | T1, Q1/Q4 |
-| T3 | Refresh workflow | Reliable refresh-and-persist behavior for PQ/pivot sources. | Defined refresh sequence, completion criteria, failure handling. | T2, Q1; R2 validation |
-| T4 | Period resolution (`last`) & placeholders | Deterministic `year/weeknum/monthnum` derivation and substitution. | Resolved-period algorithm and placeholder formatting/naming rules. | T1, Q2/Q10; define `monthnum` & aggregation |
-| T5 | Filter engine semantics | Apply year/week(<=)/category/ta with placement and multi-select rules across orientations. | Filter behavior spec per field type/location and no-data outcome. | T1,T4, Q3/Q6/Q8; R2/R3 validation |
-| T6 | Pivot snapshot extraction & paste | Static, correct data+format capture and placement without pivot/PQ artifacts. | Copy-range definition and paste/width/height behavior. | T5, Q7; golden validation |
-| T7 | Formatting, layout & grouping | Freeze/zoom/gridlines/row-col sizing/outline with deterministic grouping. | Formatting acceptance criteria; `group_rows` rule fixed. | T1,T6, Q9; define `group_rows` |
-| T8 | Report assembly & idempotency | Workbook/sheet creation, ordering, overwrite/replace, naming/collision handling. | End-to-end output lifecycle rules. | T1,T4,T6, Q5/Q10 |
-| T9 | Diagnostics & run control | Fail-fast errors, messages, and state-safe execution. | Error taxonomy/messages and run outcomes. | T2–T8, Q8 |
-| T10 | Verification & acceptance | Golden-data scenarios and sign-off criteria. | Test scenarios and Definition of Done inputs. | T1–T9, Q12, representative+golden data |
+| T1 | Config contract & validation | Implement revised schema and validation (incl. D2, D13 `group_rows`=TRUE reject, D17 dropped params, required fields). | Config schema, required/optional/defaults, validation/error matrix. | D1–D17 |
+| T2 | `filters` parse & deterministic resolution | Parse DSL (D5) and resolve `min`/`max` + `max_*` per dependency-aware rule (D10,D11). | Deterministic parse/eval/resolve spec and behavior per `data_files` row. | T1, D5,D10,D11 |
+| T3 | Data-file resolution & access policy | Deterministic extension resolution and mode-specific open/close/save. | Resolution + access rules per operation. | T1, D1,D2 |
+| T4 | Refresh workflow | Reliable refresh-and-persist behavior for PQ/pivot sources. | Refresh sequence, completion criteria, failure handling. | T3, D1; OQ-T2 |
+| T5 | Filter application & staging | Apply data-file filters once, then per-report filters with placement/reset rules; exact matching. | Stage/order/placement/reset behavior and no-data handling. | T1,T2, D4,D7,D8,D9,D12; OQ-T1 |
+| T6 | Pivot snapshot extraction & paste | Static correct data+format capture/placement without pivot/PQ artifacts. | Copy-range and paste/width/height behavior. | T5, D15; OQ-T3 |
+| T7 | Formatting & layout | Freeze/zoom/gridlines/row-col sizing/state; enforce `group_rows` policy. | Formatting acceptance criteria. | T1,T6, D13 |
+| T8 | Report assembly, naming & idempotency | Workbook/sheet creation, ordering, overwrite/replace, placeholder substitution, collision handling. | End-to-end output lifecycle and naming rules. | T1,T2,T6, D3,D11,D14 |
+| T9 | Diagnostics & run control | Fail-fast contextual errors and state-safe execution. | Error taxonomy/messages and run outcomes. | T2–T8, D12 |
+| T10 | Verification & acceptance | Golden-data scenarios and sign-off criteria. | Test scenarios and Definition of Done inputs. | T1–T9, D18, OQ-T1–T4 |
 
 ## 9. Research summary (evidence-backed synthesis)
 
-> Research tasks executed in-session: artifact/state inspection (R1-equivalent, partial due to binary/VBA/tool limits) and VBA/automation approach research (R2/R3-equivalent). Findings are actionable but include items requiring validation against representative files and target Excel.
+> Prior in-session research (artifact/state audit and VBA/PQ/pivot approach research) remains applicable; rev. 3 fixes semantics (filters DSL, dependency-aware `min/max`, staging, deterministic policies).
 
 ### 9.1 Current-architecture findings
-- **Macro workbook:** `data/theiss/treport.xlsm` contains `run`/`settings`, 4 ListObjects with expected names/columns, control/drawing artifacts, and `xl/vbaProject.bin`; macro logic is not decompiled/reviewable from repo (no exported VBA). This supports the Excel/VBA-in-place architecture (Q11).
-- **Config reality vs ТЗ:** workbook includes params/values beyond a minimal reading of ТЗ (e.g. `new_file_delimeter`, `keep_col_hidden`, `paste_row/paste_col`, `group_rows`, `report_week/year=last`, specific report/data/placeholder rows). These must be governed explicitly (Q9/Q11).
-- **Data files:** `report_m/report_w/report_wclip` exist in `monthly/weekly/base` with pivot/query/connection indicators; `report_wclip` appears structurally more complex. Exact pivot names, field captions/types, and query topology are not confirmed here.
-- **Gaps:** no `output` folder; no golden outputs; VBA behavior and several data semantics unverified.
+- `treport.xlsm` contains `run`/`settings`, 4 ListObjects and `xl/vbaProject.bin` (VBA not source-reviewed). Rev. 2 schema/values confirmed: `general`(`input_path,output_path,delimeter`), `reports`(`articleLevel4Name_clean,targetAudience,name`), `data_files`(+`filters`, tokens `<max_weeknum>/<max_year>`), `placeholders`(`max_weeknum,max_monthnum,max_year`).
+- Period selection is per `data_files` row via `filters` (e.g. `Month Number=(1-max)|Years=max`, `Week Number=(1-max)|Years=max`).
+- `mko_treport/src/{scripts,vbs,xls}` empty; no exported VBA; `report_m/report_w/report_wclip` present with pivot/query indicators, field-level schemas unverified.
+- **Config note:** current `data_files` row `report_m` has `group_rows=TRUE`; under D13 this is a fail-fast condition until a rule is approved (must be resolved in config or policy before acceptance).
 
-### 9.2 Feasible implementation approaches (top options, compatible with Excel/VBA)
-
+### 9.2 Feasible implementation approaches
 | Option | Description | Trade-offs |
 |---|---|---|
-| **A. Straight-through procedural VBA** | Single procedural flows mirroring spec steps with minimal abstraction. | **Pros:** low initial effort, direct fit. **Cons:** lower maintainability; higher regression risk for Q1/Q2/Q4/Q5/Q8/Q10 determinism; harder to optimize/validate for large/complex pivots and PQ timing. |
-| **B. Modular component-based VBA** | Separate responsibilities (config/validation, file resolution, period resolution, app-state/workbook session, pivot/filter service, range export, formatting, report builder) with centralized cleanup. | **Pros:** high maintainability; clearer enforcement of access modes and rules; easier targeted optimization and review. **Cons:** moderate upfront effort; still bounded by Excel OM limits. |
-| **C. Plan-then-execute with per-file isolation & auditable logging (on B)** | Two-phase run: preflight + resolve + immutable execution plan (paths, resolved period, sanitized names/collisions, filter specs) then isolated execution (esp. per data file) with structured progress/errors; optional validate/dry-run (no writes). | **Pros:** strongest determinism/auditability and operational reliability; surfaces Q8 issues early; predictable reruns (Q5). **Cons:** moderate effort and small planning overhead; Excel/OM unknowns remain (PQ topology, OLAP, color-grouping). |
+| **A. Straight-through procedural VBA** | Procedural flows mirroring spec. | Low initial effort; higher regression risk for DSL parse/resolve, staging/reset, determinism, and state/error handling. |
+| **B. Modular component-based VBA** | Separated config/validation, file resolution, `filters` parser+resolver, pivot/filter service, range export, formatting, report builder, centralized cleanup. | Better maintainability/correctness for DSL + placement/staging rules; moderate effort; Excel OM limits remain. |
+| **C. Plan-then-execute with per-file isolation & auditable logging (on B)** *(recommended)* | Preflight + resolve (paths, parsed `filters`, dependency-aware `min/max`/`max_*`, names/collisions, filter plan) then isolated execution with structured errors; optional validate/dry-run. | Strongest determinism/auditability for D5–D14; predictable reruns and clear fail-fast diagnostics. Moderate effort. |
 
-### 9.3 Recommended approach (clear recommendation)
-- **Recommendation:** **Option C implemented on the modular foundation of Option B**.
-- **Rationale:** best aligns with confirmed constraints — deterministic “last” resolution and naming (Q2,Q10), strict mode-specific read/write behavior (Q1), ordered/idempotent outputs (Q5), exact/placed filtering (Q3,Q6), fail-fast contextual errors (Q8), and the need for preflight/validation against representative and golden data (Q12). It reduces common Excel automation failures (stale refresh state, partial UI/state corruption, ambiguous file/name resolution) while keeping the solution within the existing `treport.xlsm` macro architecture.
+### 9.3 Recommended approach
+- **Recommendation:** **Option C on modular foundation B**, aligned to D1–D17.
+- **Rationale:** confirmed `filters` DSL and dependency-aware `min/max`/placeholder resolution (D5,D10,D11), strict staging/placement (D7,D8), and fail-fast policies (D12–D14) require deterministic pre-resolution, explicit validation, and per-file isolation to avoid silent mis-filtering, stale state across report rows, and ambiguous naming/output.
 
-### 9.4 Key technical practices to apply (from research, to inform planning)
-- **State & access:** snapshot/restore application state; avoid UI selection; enforce Q1 at open boundary; track macro-opened workbooks; never save sources in `Create_report`.
-- **PQ/pivot refresh:** force synchronous completion before dependent pivot refresh/save (e.g. disable background query where applicable, wait for async queries) and refresh pivot caches after data is current; treat ordering/completion as a validation point (Q1/FR-REF).
-- **Pivot/filtering:** identify pivot/fields deterministically; filter in place by orientation without moving fields; support multi-select exact-match (Q6) and week threshold `<=` (Q3) with manual-update/batching considerations; handle “no items visible” explicitly (Q8).
-- **“Last” resolution:** compute from actual data in relevant `data_file/data_sheet` per a single documented aggregation rule across files (Q2); log resolved period.
-- **Static copy:** capture presented range (labels/totals, no pivot/page/PQ) and paste static values+formats (+widths) (Q7); copy row heights/hidden state efficiently (run-length) and apply deterministic outline/grouping.
-- **Naming:** sanitize invalid chars, enforce 31-char limit, deterministic collision policy, and explicit placeholder formatting (Q10).
+### 9.4 Key technical practices
+- **`filters` handling:** strict validated parser per D5; resolve `min/max` dependency-aware per D10 against deterministic data sources; derive/log `max_*` per D11.
+- **State & access:** enforce D1 modes; snapshot/restore app state; no unnecessary UI selection.
+- **PQ/pivot refresh:** synchronous completion before pivot cache refresh/save (validate OQ-T2).
+- **Filter staging/placement:** per D8 apply data-file filters once, reapply report filters per report row; per D7 filter in place or add to Filters without moving.
+- **Static copy & formatting:** presented range values+formats (+widths) per D15; row heights/outline handling; enforce D13.
+- **Naming:** substitute in `report_sheet` per D11; sanitize/limit/collision fail-fast per D14.
 
-## 10. Risks and key unknowns (requiring validation)
+## 10. Risks and known constraints
 
-| ID | Risk / unknown | Impact | Mitigation / validation needed |
+| ID | Risk / unknown | Impact | Mitigation / validation |
 |---|---|---|---|
-| R1 | **VBA logic opaque** (`xl/vbaProject.bin` not decompiled/exported) | Current behavior may diverge from ТЗ/this spec | Inspect in Excel/VBA IDE or approved extraction; reconcile before/with implementation; consider exporting modules for review. |
-| R2 | **Pivot topology & field identity** (which pivot, exact field captions/types for year/week/category/ta, orientation, regular vs OLAP/Data Model) | Filters/copy may target wrong object or fail | Validate on representative `report_m/report_w/report_wclip` (and real inputs); fix deterministic identification rules. |
-| R3 | **PQ refresh completeness/timing** across Excel builds and query types | Stale persisted data after `Refresh_data` | Validate synchronous refresh + completion waiting + cache refresh on target Excel; confirm all relevant queries/load modes refreshed. |
-| R4 | **“Last” aggregation across multiple data files** and definition of “actual data” (cache/items vs source) | Inconsistent period resolution | Fix one deterministic aggregation rule and data source; log and test with differing files. |
-| R5 | **`monthnum` derivation** (week can span months/years) | Incorrect placeholder/sheet naming | Define explicit business/technical rule or source for `monthnum`; add boundary tests. |
-| R6 | **`group_rows` color-band rule** (“от белого в центре”) undefined; `DisplayFormat`/conditional color limits | Non-deterministic or infeasible grouping | Obtain explicit rule (inspected column(s), color→level mapping, boundaries) or approve deterministic alternative (e.g. outline-level copy); do not guess. |
-| R7 | **No-data outcome policy** (fail-fast vs marked-empty sheet) not fixed to a single option | Misleading outputs or unexpected aborts | Select and document one deterministic policy; reflect in acceptance cases. |
-| R8 | **Sheet-name collision policy** and placeholder token/format details | Overwritten/confusing sheets or Excel errors | Fix deterministic collision handling and exact token syntax/formatting. |
-| R9 | **Extra/ambiguous config params** (`new_file_delimeter`, `keep_col_hidden`) and exact `ta` semantics per workbook vs ТЗ text | Silent misbehavior or config drift | Confirm meaning: specify or explicitly ignore; document. |
-| R10 | **Copy fidelity** (range bounds incl. totals/page area, number/date fidelity, widths/heights/hidden/outline, conditional formats appearance) | Output differs from intended | Validate against golden outputs on representative filtered cases. |
-| R11 | **File resolution details** (supported extensions and precedence order) and locked/open files | Wrong file picked or run failures | Fix ordered extension list/precedence; define locked-file failure behavior. |
-| R12 | **Performance on large files/many pivot items** | Long/unresponsive runs | Benchmark with representative data; apply batching/manual-update and progress feedback (technical). |
-| R13 | **Environment prerequisites** (Excel version, Windows, macro trust, PQ enabled, local/network paths) | Non-runnable or inconsistent behavior | Document and validate target environment (Q12). |
+| R1 | **Pivot topology & field identity** (pivot selection, exact captions/types/orientations for `articleLevel4Name_clean`, `targetAudience`, `Years`, `Week Number`, `Month Number`; regular vs OLAP/Data Model) | Filters/copy may target wrong object or fail | Validate on `report_m/report_w/report_wclip` and real inputs (OQ-T1); fail fast on missing/ambiguous fields (D12). |
+| R2 | **PQ refresh completeness/timing** across Excel builds/query types | Stale persisted data after `Refresh_data` | Validate synchronous completion + pivot cache refresh on target Excel (OQ-T2). |
+| R3 | **`min`/`max` data source details** (pivot cache items vs visible/other values) consistent with D10 | Incorrect period/filters/`max_*` | Confirm against actual data behavior during OQ-T1/T3; log resolved values. |
+| R4 | **`group_rows` config conflict**: `report_m` currently `group_rows=TRUE` but D13 requires fail-fast until rule approved | `Create_report` will fail on current config unless changed | Resolve by setting `group_rows` blank/false for affected rows or by approving a deterministic rule and updating D13/spec. |
+| R5 | **Copy fidelity** (range bounds incl. totals/page area, widths/heights/hidden/outline, value/date fidelity) | Output differs from intended | Golden-output validation (OQ-T3). |
+| R6 | **Locked/open file handling** (sources/outputs in use) and filesystem permissions | Run failures or blocked overwrite | Fail fast with contextual errors (D12); validate in target environment. |
+| R7 | **VBA logic opaque** (`xl/vbaProject.bin` not source-reviewed) | Divergence from spec/current behavior | Inspect/reconcile in Excel/VBA IDE or approved extraction (OQ-T4). |
+| R8 | **Performance** on large pivots/many items | Long/unresponsive runs | Benchmark with representative data; batch/manual-update/progress (technical). |
+| R9 | **Environment prerequisites** (Excel version, Windows, macro trust, PQ enabled, paths) | Inconsistent or failing runs | Provide/confirm baseline (D18, OQ-B7). |
 
 ## 11. Assumptions
 
-- **A1:** `treport` remains an Excel/VBA solution in `treport.xlsm` (Q11).
-- **A2:** Supported data-file extensions and precedence will be explicitly defined (recommended set includes `.xlsx`, `.xlsm`, `.xlsb`) and applied per Q4.
-- **A3:** “Last” aggregation rule across multiple data files is a single deterministic max-based rule as stated in Q2 unless a different explicit rule is provided.
-- **A4:** `ta` in `reports` is a pivot filter field applied with the same placement/matching principles as other configured filters; exact field caption(s) will be confirmed from data (R2).
-- **A5:** One output workbook per `reports` row; `reports.name` is the output base name (Q5).
-- **A6:** Placeholder tokens are the configured names `weeknum`, `monthnum`, `year` as present in the workbook; exact delimiter/syntax/zero-padding will be standardized and documented (Q10).
-- **A7:** A clear, deterministic no-data outcome and collision policy will be fixed (recommendation: fail-fast for no-data/collisions for correctness unless stakeholders require marked-empty output) (Q8/Q10).
-- **A8:** `group_rows` will be implemented only under an explicitly defined deterministic rule (color-band rule to be specified) or treated as no-op/blocked until specified (Q9).
+- **A1:** `treport` remains and must be implemented as a **VBA-only** Excel solution in `treport.xlsm`; **no Python or any other programming/scripting language** is permitted (D16).
+- **A2:** `articleLevel4Name_clean` and `targetAudience` are pivot filter fields matching those captions/names in source data; `Years`, `Week Number`, `Month Number` are period fields used in `filters` where configured (to be validated OQ-T1).
+- **A3:** `min`/`max` and comparable values in period fields are numeric and compared numerically; ranges are inclusive (D10).
+- **A4:** Each `data_files` row that is executed to produce named sheets with placeholders provides resolvable `max_*` values as required by its `filters`/referenced tokens; otherwise execution fails fast by design (D11,D12).
+- **A5:** Correctness of values/formatting/layout is judged against an agreed golden output for a fixed configuration/period (D18).
 
-## 12. Open questions
-
-### 12.1 Business/product (must be confirmed before acceptance of affected behavior)
-- **OQ-B1 (Q8 detail):** For “filter yields no data”, is the accepted outcome **fail-fast error** (recommended) or a **generated sheet with explicit ‘NO DATA’ marker/context**?
-- **OQ-B2 (Q10 detail):** Exact **sheet-name collision** policy — fail-fast (recommended) or deterministic auto-suffix?
-- **OQ-B3 (Q9):** Approved deterministic rule for `group_rows=TRUE` (color-band mapping, source column(s), “от белого в центре”) or decision to disable/ignore until defined.
-- **OQ-B4 (Q10):** Definitive definition/format of `monthnum` relative to resolved `report_week/report_year` (and token syntax/zero-padding).
-- **OQ-B5 (Q9):** Business meaning and desired handling of `new_file_delimeter` and `keep_col_hidden` (specify behavior or explicitly ignore).
-- **OQ-B6 (Q4):** Confirm the ordered list and precedence of supported file extensions for `data_file` resolution.
-- **OQ-B7 (Q12):** Provide/confirm target Excel version & OS, representative input dataset, and at least one **golden** output for a fixed period to sign off correctness.
-
-### 12.2 Technical validations (not business ambiguity, but must be closed for implementation confidence)
-- **OQ-T1:** Identify actual pivot(s), field captions/types/orientations, and PQ/connection topology in `report_m/report_w/report_wclip` (and real inputs).
-- **OQ-T2:** Verify synchronous PQ refresh + pivot cache refresh completeness on target Excel.
-- **OQ-T3:** Confirm copy-range boundaries and formatting fidelity (totals, widths/heights/hidden/outline, value/date fidelity) against golden output.
-- **OQ-T4:** Inspect/reconcile `xl/vbaProject.bin` behavior with this spec where relevant.
-
-## 13. Out of scope (explicit)
+## 12. Out of scope (explicit)
 
 - Implementation, code changes, VBA authoring/refactoring, or repository/data modifications.
 - New architecture, non-Excel tooling/pipelines, scheduling/orchestration services.
+- Use of Python or any programming/scripting language other than VBA for any part of the solution.
 - Changes to source data preparation, metric definitions, or upstream PQ/data models.
-- Performance SLAs beyond “works correctly on representative agreed data” unless separately defined.
+- `group_rows` color-band grouping until an explicit deterministic rule is approved (D13).
+- Performance SLAs beyond correctness on representative agreed data unless separately defined.
+
+## 13. Open items (non-blocking for planning, required for correctness sign-off)
+
+### 13.1 Product/acceptance input
+- **OQ-B7 (D18):** Provide/confirm target Excel version & OS, representative `input_path` dataset, and ≥1 **golden** expected output for a fixed configuration/period.
+
+### 13.2 Technical validations
+- **OQ-T1:** Identify actual pivot(s), field captions/types/orientations, and PQ/connection topology in `report_m/report_w/report_wclip` and real inputs (incl. `Years`, `Week Number`, `Month Number`, `articleLevel4Name_clean`, `targetAudience`).
+- **OQ-T2:** Verify synchronous PQ refresh + pivot cache refresh completeness on target Excel.
+- **OQ-T3:** Confirm copy-range boundaries and formatting fidelity against golden output.
+- **OQ-T4:** Inspect/reconcile `xl/vbaProject.bin` behavior with this spec where relevant.
 
 ## 14. Definition of Ready (for implementation planning)
 
-This specification is **ready for implementation planning** when the following are satisfied:
+Ready for implementation planning when:
+1. **Business decisions/clarifications closed:** D1–D17 confirmed (satisfied — PO selected all recommended). Resolved: OQ-1a–d, OQ-2a–c, OQ-3a–b, OQ-4, OQ-B1, OQ-B3–B6.
+2. **Scope & requirements stable:** §§4–7 agreed, including `filters` grammar (D5), dependency-aware `min`/`max` and `max_*` derivation (D10,D11), placement/staging (D7,D8), and deterministic policies (D2,D12–D14).
+3. **Deterministic policies fixed:** extension precedence, `min`/`max` resolution algorithm, placeholder mapping/scope/syntax/no-padding, no-data outcome (fail-fast), collision handling (fail-fast), `group_rows` handling (fail-fast while undefined).
+4. **Validation baseline available:** target Excel/OS and representative dataset with golden output (OQ-B7) — *pending input*.
+5. **Technical validations tracked:** §13.2/§10 treated as implementation/verification tasks.
 
-1. **Business decisions confirmed:** Q1–Q12 accepted as recorded (satisfied — PO selected all recommended) **and** the remaining product choices in §12.1 (OQ-B1–B7) are answered/fixed (policy selections and golden-acceptance inputs provided).
-2. **Scope & requirements stable:** in-scope operations (`Refresh_data`, `Create_report`), config contract, access modes, period/filter/copy/naming/idempotency rules, and fail-fast/error expectations are agreed per §§4–7.
-3. **Deterministic policies fixed:** extension precedence (Q4), “last” aggregation rule (Q2), `monthnum` rule and token format (Q10), no-data outcome (Q8), sheet-name collision handling (Q10), and `group_rows` / extra-param handling (Q9).
-4. **Validation baseline available:** target Excel/OS confirmed and at least one representative dataset with a golden expected output for a fixed period is available (Q12).
-5. **Known risks acknowledged:** technical validations (§12.2, §10) are tracked as implementation/verification tasks with owners, not treated as unknown business requirements.
+**Planning gate:** items 1–3 completed (satisfied). Item 4 pending but does not block planning; items 4–5 must close before correctness sign-off. **Note:** current config contains `group_rows=TRUE` (R4) which conflicts with D13 and must be addressed (config change or approved rule) as part of implementation/acceptance.
 
-**Planning gate (minimum to start implementation work):** §14 items 1 (including OQ-B1–B6 decisions) and 2–3 completed; items 4–5 may run in parallel as explicit validation tasks but must be closed before correctness sign-off.
+## 15. Traceability summary (rev. 3)
 
-## 15. Traceability summary
-
-| ТЗ / need | Spec coverage |
+| ТЗ / change / decision | Spec coverage |
 |---|---|
-| Settings tables `general/reports/data_files/placeholders` | FR-CFG, §3, §6 (Q11) |
-| `Refresh_data` (refresh PQ/RefreshAll, save/close) | FR-REF, FR-FILE, Q1 |
-| `Create_report` (reports per row, sheets per `data_files` order) | FR-RPT, FR-NAME, Q5/Q10 |
-| Read-only handling of data files | FR-FILE, Q1 (mode-specific resolution) |
-| Filter placement & period/category/ta rules | FR-FLT, Q2/Q3/Q6 |
-| Copy without pivot/PQ, values+formats | FR-RPT, Q7 |
-| Formatting (paste/freeze/zoom/gridlines/row-col/grouping) | FR-RPT, Q9 |
-| Missing files/config errors | FR-FILE/FR-FLT/FR-RUN, Q8 |
-| Placeholders in names/sheets | FR-NAME, Q10 |
+| `general`: `input_path,output_path,delimeter`; removed `report_week/year` and dropped extras | FR-CFG-2, §3, D2,D17 |
+| `reports`: `articleLevel4Name_clean,targetAudience,name` | FR-CFG-3, FR-FLT-5/6/7, D4,D8,D9 |
+| `data_files`: +`filters`, order, format columns | FR-CFG-4, FR-FLT-1/2/4/6/7, FR-RPT, D4–D8,D10 |
+| `filters` DSL + `min/max` + dependency-aware resolution | FR-FLT-1/2/3, D5,D6,D10,D11, §9.4 |
+| Placeholders `max_weeknum/max_monthnum/max_year`, `<name>` in `report_sheet`, no padding | FR-CFG-5, FR-NAME-1, D11 |
+| Staging: data-file filters once, report filters per report row | FR-FLT-4/5, D8, §5 |
+| Placement: in-place or add to Filters, all filter fields | FR-FLT-6, D7, §5 |
+| Access modes (Create read-only; Refresh writable+save) | FR-FILE-3/4, FR-REF, D1 |
+| File resolution `.xlsx/.xlsm/.xlsb`, fail if none/>1 | FR-FILE-1/2, D2 |
+| Output per report, overwrite, idempotent sheets in order | FR-RPT-1/2/7, D3 |
+| Copy presented range, exclude pivot/page/PQ, static values+formats | FR-RPT-3/4, D15 |
+| Formatting defaults; `group_rows=TRUE` fail-fast until rule approved | FR-RPT-5/6, D13, R4 |
+| Fail-fast errors incl. no-data and collisions | FR-*, D12,D14 |
+| Acceptance requires target Excel/OS + representative data + golden output | D18, §13.1, §14 |
 
 ---
-*End of specification.*
+*End of specification (rev. 4).*
