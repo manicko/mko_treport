@@ -1,12 +1,9 @@
 Attribute VB_Name = "modTreportExtract"
 Option Explicit
 
-' treport rev.5 - presented pivot range extraction and static paste (B9,D15)
-
 Public Function GetPresentedRange(ByVal pt As PivotTable, ByVal ctx As String) As Range
     Dim rg As Range
     On Error Resume Next
-    ' TableRange1 typically excludes page fields area; TableRange2 may include it.
     Set rg = pt.TableRange1
     If rg Is Nothing Then Set rg = pt.TableRange2
     On Error GoTo 0
@@ -20,17 +17,23 @@ Public Sub CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Worksheet
     Dim srcRg As Range
     Dim dstCell As Range
     Dim pr As Long, pc As Long
+    Dim i As Long
     pr = pasteRow
     pc = pasteCol
     If pr <= 0 Then pr = 1
     If pc <= 0 Then pc = 1
 
     On Error GoTo EH
-    srcPt.RefreshTable
-    srcPt.Parent.Activate
+    On Error Resume Next
+    srcPt.ManualUpdate = False
+    srcPt.Update
+    DoEvents
+    On Error GoTo EH
+
     Set srcRg = GetPresentedRange(srcPt, ctx)
-    srcRg.Copy
     Set dstCell = dstWs.Cells(pr, pc)
+
+    srcRg.Copy
     dstCell.PasteSpecial Paste:=xlPasteValuesAndNumberFormats
     srcRg.Copy
     dstCell.PasteSpecial Paste:=xlPasteFormats
@@ -38,10 +41,10 @@ Public Sub CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Worksheet
     dstCell.PasteSpecial Paste:=xlPasteColumnWidths
     Application.CutCopyMode = False
 
-    ' copy row heights for presented rows
-    Dim i As Long
     For i = 1 To srcRg.Rows.Count
+        On Error Resume Next
         dstWs.Rows(pr + i - 1).RowHeight = srcRg.Rows(i).RowHeight
+        On Error GoTo EH
     Next i
     Exit Sub
 EH:
@@ -58,7 +61,7 @@ Public Sub ApplySheetFormatting(ByVal ws As Worksheet, ByVal freezeRow As Varian
         If IsNumeric(zoomVal) Then
             Dim z As Double
             z = CDbl(zoomVal)
-            If z > 0 And z <= 5 Then z = z * 100 ' e.g. 0.7 -> 70
+            If z > 0 And z <= 5 Then z = z * 100
             If z >= 10 And z <= 400 Then ActiveWindow.Zoom = CLng(z)
         End If
     End If

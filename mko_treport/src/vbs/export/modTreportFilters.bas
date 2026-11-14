@@ -1,36 +1,24 @@
 Attribute VB_Name = "modTreportFilters"
 Option Explicit
 
-Public Const OPTIONAL_MISSING_TOKEN As String = "ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ"
-
-Public Type ParsedClause
-    fieldName As String
-    RawExpr As String
-    Kind As String ' scalar|range|list
-    ScalarValue As String
-    RangeStart As String
-    RangeEnd As String
-    ListValues() As String
-    HasList As Boolean
-End Type
-
-Public Type ParsedFilters
-    Clauses() As ParsedClause
-    Count As Long
-End Type
-
-Public Type ResolvedContext
-    YearFieldName As String
-    MaxYear As Variant
-    MaxMonth As Variant
-    MaxWeek As Variant
-    HasYear As Boolean
-    HasMonth As Boolean
-    HasWeek As Boolean
-End Type
-
 Public Function IsOptionalSkipToken(ByVal token As String) As Boolean
-    IsOptionalSkipToken = (StrComp(modTreportConfig.Norm(token), OPTIONAL_MISSING_TOKEN, vbBinaryCompare) = 0)
+    Dim t As String
+    t = modTreportConfig.Norm(token)
+    ' V-008: "ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ" optional if absent
+    If Len(t) = 0 Then Exit Function
+    If StrComp(t, ChrW$(1047) & ChrW$(1059) & ChrW$(1041) & ChrW$(1053) & ChrW$(1040) & ChrW$(1071) & " " & _
+               ChrW$(1055) & ChrW$(1040) & ChrW$(1057) & ChrW$(1058) & ChrW$(1040) & " " & _
+               ChrW$(1044) & ChrW$(1051) & ChrW$(1071) & " " & _
+               ChrW$(1044) & ChrW$(1045) & ChrW$(1058) & ChrW$(1045) & ChrW$(1049), vbBinaryCompare) = 0 Then
+        IsOptionalSkipToken = True
+        Exit Function
+    End If
+    ' robust fallback marker
+    If InStr(1, t, ChrW$(1044) & ChrW$(1051) & ChrW$(1071) & " " & ChrW$(1044) & ChrW$(1045) & ChrW$(1058) & ChrW$(1045) & ChrW$(1049), vbBinaryCompare) > 0 Then
+        If InStr(1, t, ChrW$(1047) & ChrW$(1059) & ChrW$(1041) & ChrW$(1053) & ChrW$(1040) & ChrW$(1071), vbBinaryCompare) > 0 Then
+            IsOptionalSkipToken = True
+        End If
+    End If
 End Function
 
 Public Function SplitReportValues(ByVal raw As String, ByVal delim As String) As Variant
@@ -66,9 +54,35 @@ Private Function StripOuterParens(ByVal expr As String) As String
     StripOuterParens = s
 End Function
 
+Public Type ParsedClause
+    fieldName As String
+    RawExpr As String
+    Kind As String
+    ScalarValue As String
+    RangeStart As String
+    RangeEnd As String
+    ListValues() As String
+    HasList As Boolean
+End Type
+
+Public Type ParsedFilters
+    Clauses() As ParsedClause
+    Count As Long
+End Type
+
+Public Type ResolvedContext
+    YearFieldName As String
+    MaxYear As Variant
+    MaxMonth As Variant
+    MaxWeek As Variant
+    HasYear As Boolean
+    HasMonth As Boolean
+    HasWeek As Boolean
+End Type
+
 Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ctx As String)
-    Dim e As String, inner As String, parts() As String, i As Long, dashPos As Long
-    Dim leftB As String, rightB As String
+    Dim e As String, inner As String, parts() As String, i As Long
+    Dim leftB As String, rightB As String, p As Long, found As Boolean
     e = modTreportConfig.Norm(c.RawExpr)
     If Len(e) = 0 Then modTreportConfig.Fail 2305, ctx & ",field='" & c.fieldName & "'", "Empty expression."
     If Len(delim) = 0 Then modTreportConfig.Fail 2306, ctx, "general.delimeter is required for filter parsing."
@@ -86,10 +100,6 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
     End If
     If Left$(e, 1) = "(" And Right$(e, 1) = ")" And Len(e) >= 5 Then
         inner = Mid$(e, 2, Len(e) - 2)
-        ' range: split on '-' that separates two bound tokens (min/max or numeric)
-        dashPos = InStrRev(inner, "-", -1, vbBinaryCompare)
-        ' try to find a dash such that left and right are valid tokens
-        Dim p As Long, found As Boolean
         found = False
         For p = 2 To Len(inner) - 1
             If Mid$(inner, p, 1) = "-" Then
@@ -119,7 +129,7 @@ End Function
 Public Function ParseAndClassify(ByVal filtersText As String, ByVal delim As String, ByVal ctx As String) As ParsedFilters
     Dim pf As ParsedFilters
     Dim parts() As String, i As Long, n As Long
-    Dim s As String
+    Dim s As String, a As Long, b As Long
     s = modTreportConfig.Norm(filtersText)
     If Len(s) = 0 Then modTreportConfig.Fail 2301, ctx, "filters expression is empty."
     parts = Split(s, "|")
@@ -146,8 +156,6 @@ Public Function ParseAndClassify(ByVal filtersText As String, ByVal delim As Str
         ClassifyExpr pf.Clauses(n), delim, ctx
 NextClause:
     Next i
-    ' duplicate field check
-    Dim a As Long, b As Long
     For a = 1 To pf.Count
         For b = a + 1 To pf.Count
             If StrComp(pf.Clauses(a).fieldName, pf.Clauses(b).fieldName, vbBinaryCompare) = 0 Then
@@ -197,7 +205,6 @@ Public Function ResolveMinMaxAndYear(ByVal pt As PivotTable, ByRef pf As ParsedF
     mi = FindClauseIndex(pf, "Month Number")
     wi = FindClauseIndex(pf, "Week Number")
 
-    ' resolve year first if present (dependency-aware D10)
     If yi > 0 Then
         rc.YearFieldName = "Year"
         rc.HasYear = True
@@ -213,15 +220,15 @@ Public Function ResolveMinMaxAndYear(ByVal pt As PivotTable, ByRef pf As ParsedF
                     modTreportConfig.Fail 2315, ctx & ",field='Year'", "Unsupported scalar year value '" & pf.Clauses(yi).ScalarValue & "'."
                 End If
             Case "range"
-                ' for Year ranges, max_year = resolved end bound
                 rc.MaxYear = ResolveBound(pf.Clauses(yi).RangeEnd, "Year", pt, ctx & ",resolve_year_end")
             Case "list"
-                ' max of provided numeric list
                 rc.MaxYear = MaxOfStringArray(pf.Clauses(yi).ListValues, ctx & ",field='Year'")
         End Select
-        ' apply year selection early to resolve dependent period bounds in resolved year context
         ApplySingleClauseSelection pt, pf.Clauses(yi), vbNullString, rc, ctx & ",apply_year_context"
-        pt.RefreshTable
+        On Error Resume Next
+        pt.Update
+        DoEvents
+        On Error GoTo 0
     End If
 
     If mi > 0 Then
@@ -275,7 +282,8 @@ Public Sub ApplyDataFileFilters(ByVal pt As PivotTable, ByRef pf As ParsedFilter
         ApplySingleClauseSelection pt, pf.Clauses(i), delim, rc, ctx & ",field='" & pf.Clauses(i).fieldName & "'"
     Next i
     On Error Resume Next
-    pt.RefreshTable
+    pt.Update
+    DoEvents
     On Error GoTo 0
 End Sub
 
@@ -291,7 +299,7 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
     Dim vals As Collection
     Dim v As Variant
     Dim loB As Double, hiB As Double
-    Dim s As String
+    Dim s As String, i As Long, j As Long, matched As Boolean
 
     Set pfld = modTreportPivot.GetPivotFieldRequired(pt, c.fieldName, ctx)
     Select Case c.Kind
@@ -300,16 +308,13 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
             If LCase$(s) = "max" Or LCase$(s) = "min" Then
                 s = CStr(ResolveBound(s, c.fieldName, pt, ctx))
             End If
-            ' normalize numeric token to match pivot item text if possible
             col.Add NormalizeToPivotItem(pfld, s)
         Case "range"
             loB = ResolveBound(c.RangeStart, c.fieldName, pt, ctx)
             hiB = ResolveBound(c.RangeEnd, c.fieldName, pt, ctx)
             If loB > hiB Then modTreportConfig.Fail 2319, ctx & ",field='" & c.fieldName & "'", "Range start is greater than range end."
             Set vals = modTreportPivot.FieldAvailableNumericValues(pfld)
-            Dim matched As Boolean
             matched = False
-            Dim i As Long
             For i = 1 To vals.Count
                 v = vals(i)
                 If CDbl(v) >= loB And CDbl(v) <= hiB Then
@@ -319,7 +324,6 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
             Next i
             If Not matched Then modTreportConfig.Fail 2320, ctx & ",field='" & c.fieldName & "'", "No available numeric values matched range (" & c.RangeStart & "-" & c.RangeEnd & ")."
         Case "list"
-            Dim j As Long
             For j = LBound(c.ListValues) To UBound(c.ListValues)
                 col.Add NormalizeToPivotItem(pfld, c.ListValues(j))
             Next j
@@ -339,7 +343,6 @@ Public Function NormalizeToPivotItem(ByVal pf As PivotField, ByVal token As Stri
             NormalizeToPivotItem = n
             Exit Function
         End If
-        ' numeric equivalence (e.g. "2026" vs "2026.0")
         If IsNumeric(n) And IsNumeric(t) Then
             If CDbl(n) = CDbl(t) Then
                 NormalizeToPivotItem = n

@@ -1,8 +1,6 @@
 Attribute VB_Name = "modTreportPivot"
 Option Explicit
 
-' treport rev.5 - pivot discovery, members, filter application, presented state
-
 Public Function GetDataSheet(ByVal wb As Workbook, ByVal sheetName As String, ByVal ctx As String) As Worksheet
     Dim ws As Worksheet
     On Error Resume Next
@@ -103,7 +101,6 @@ Public Function CollectionHas(ByVal col As Collection, ByVal key As String) As B
 End Function
 
 Public Sub EnsureFilterPlacement(ByVal pf As PivotField)
-    ' D7: do not move if already in Rows/Columns/Filters; add to Filters if hidden
     On Error Resume Next
     Dim o As Long
     o = pf.Orientation
@@ -120,7 +117,7 @@ Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String
     Dim pf As PivotField
     Dim avail As Collection
     Dim wanted As Object
-    Dim i As Long, j As Long
+    Dim i As Long
     Dim tok As String, itemName As String
     Dim anyWantedVisible As Boolean
 
@@ -136,13 +133,12 @@ Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String
         If CollectionHas(avail, tok) Then
             If Not wanted.Exists(tok) Then wanted.Add tok, True
         Else
-            ' try numeric-normalized match against available
             Dim matchedKey As String
             matchedKey = FindMatchingAvailable(avail, tok)
             If Len(matchedKey) > 0 Then
                 If Not wanted.Exists(matchedKey) Then wanted.Add matchedKey, True
             ElseIf allowOptionalSkip And modTreportFilters.IsOptionalSkipToken(tok) Then
-                ' skip optional token absent (V-008)
+                ' skip optional absent
             Else
                 modTreportConfig.Fail 2406, ctx & ",field='" & fieldName & "'", "Required filter value '" & tok & "' was not found among available pivot items."
             End If
@@ -158,30 +154,21 @@ NextTok:
     pt.ManualUpdate = True
     On Error Resume Next
     pf.EnableMultiplePageItems = True
+    Err.Clear
     pf.ClearAllFilters
+    Err.Clear
     pf.ClearManualFilter
+    Err.Clear
     On Error GoTo EH
 
-    ' Ensure one wanted item visible first
     For i = 1 To pf.PivotItems.Count
         itemName = modTreportConfig.Norm(pf.PivotItems(i).Name)
-        If wanted.Exists(itemName) Then
+        If IsWantedItem(wanted, itemName) Then
             pf.PivotItems(i).Visible = True
             anyWantedVisible = True
             Exit For
         End If
     Next i
-    If Not anyWantedVisible Then
-        ' try numeric match by iterating
-        For i = 1 To pf.PivotItems.Count
-            itemName = modTreportConfig.Norm(pf.PivotItems(i).Name)
-            If IsWantedItem(wanted, itemName) Then
-                pf.PivotItems(i).Visible = True
-                anyWantedVisible = True
-                Exit For
-            End If
-        Next i
-    End If
     If Not anyWantedVisible Then modTreportConfig.Fail 2407, ctx & ",field='" & fieldName & "'", "No valid values remain selected for filter (after matching)."
 
     For i = 1 To pf.PivotItems.Count
@@ -191,6 +178,7 @@ NextTok:
         Else
             On Error Resume Next
             pf.PivotItems(i).Visible = False
+            If Err.Number <> 0 Then Err.Clear
             On Error GoTo EH
         End If
     Next i
@@ -198,7 +186,7 @@ NextTok:
     pt.ManualUpdate = False
     On Error Resume Next
     pt.Update
-    pt.RefreshTable
+    DoEvents
     On Error GoTo 0
     Exit Sub
 EH:
@@ -251,8 +239,7 @@ Public Function IsPivotDataEmpty(ByVal pt As PivotTable) As Boolean
     If dr Is Nothing Then
         IsPivotDataEmpty = True
     Else
-        ' if all cells empty/error/zero-count may still be "shown"; treat as empty only when no data cells
-        IsPivotDataEmpty = (dr.Cells.Count = 0)
+        IsPivotDataEmpty = (Application.WorksheetFunction.CountA(dr) = 0)
     End If
     On Error GoTo 0
 End Function
