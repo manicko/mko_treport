@@ -1,0 +1,115 @@
+---
+id: treport-pipeline-dataflow
+domain: vba-reporting
+tags:
+  - vba
+  - excel
+  - pipeline
+  - pivots
+  - refresh
+  - output
+related:
+  - vba-reporting-overview
+  - treport-configuration-model
+  - treport-filters-dsl
+---
+
+## Purpose
+
+Documents the high-level execution pipeline and data flow for treport: refresh and report workflows, path/session handling, filter and pivot processing, snapshot extraction, output assembly, and validation/state-safety behavior. This is the SSOT for runtime flow concepts in governed docs.
+
+## Main Concepts
+
+- Two primary workflows: `Refresh_data` (source refresh/persist) and `Create_report` (static report generation).
+- Processing is configuration-driven and ordered by `data_files` rows.
+- `Create_report` uses read-only source access and never saves source workbooks; `Refresh_data` opens writable and saves refreshed sources.
+- Validation is deterministic and fail-fast; application state is captured/restored around runs.
+
+## Refresh_data Flow
+
+High-level implemented sequence (`modTreportRun.Refresh_data`):
+
+1. Capture and apply application runtime state (`modTreportState`).
+2. Read and validate configuration (`modTreportConfig.ReadConfig`).
+3. Normalize/validate input and output paths/readiness.
+4. For each `data_files` row in order:
+   - Resolve source workbook path (`modTreportFiles.ResolveDataFilePath`).
+   - Open workbook writable (`OpenWorkbookWritable`).
+   - Refresh workbook data (`modTreportRefresh.RefreshWorkbookData`) using best-effort synchronous behavior (connections/queries/pivots) before save.
+   - Save and close on success; close without save on error paths.
+5. Restore application state and report explicit outcome/status.
+
+**Verification note:** Power Query/pivot completion and persisted-state guarantees are environment-dependent and not runtime-proven in this audit.
+
+## Create_report Flow
+
+High-level implemented sequence (`modTreportRun.Create_report` / `ProcessDataFile`):
+
+1. Capture/apply application state and read/validate configuration.
+2. Validate paths/readiness and precompute per-report sanitized output names; fail fast on report-filename collisions.
+3. Create one output workbook per report and maintain per-output-workbook sheet-name tracking.
+4. For each `data_files` row in order:
+   - Resolve source workbook and open read-only.
+   - Parse/classify `data_files.filters`, resolve min/max/year/period context, and apply data-file filters once per source.
+   - For each report row: apply report-level filters, verify data presence, derive/substitute `report_sheet` name, enforce sheet-name collision rules, create/add report sheet, extract/copy pivot snapshot, and apply sheet formatting.
+   - Close source workbook without save.
+5. Save output workbooks (overwrite-on-success intent) and close them.
+6. Restore application state and report explicit outcome/status.
+
+## Path Resolution and Output Readiness
+
+- Source workbooks are resolved from `general.input_path` and `data_files.data_file`.
+- **Current implementation behavior (exported code):** resolution searches recursively under `input_path` and requires exactly one total matching workbook across allowed extensions/locations; otherwise it fails fast.
+- **Alignment note:** this is stricter on ambiguity and broader in search scope than a simple "pick by precedence" description. Treat external precedence wording as not fully aligned until reconciled; this document records as-implemented behavior.
+- Output path readiness/creation and write-precondition checks are enforced before report generation proceeds.
+
+## Pivot Filter Application (P01 Semantics)
+
+High-level semantics as specified/implemented in exported modules (`modTreportPivot`, `modTreportFilters`, `modTreportRun`), **runtime-unverified**:
+
+- **Availability basis:** field handling is determined by PivotTable available fields (not solely by current Filters placement).
+- **Placement behavior:**
+  - Available-but-inactive fields: move to Filters area, then filter/sort as required.
+  - Active fields (in Filters/Columns/Rows): filter in place and do not move fields out of Columns/Rows; preserve layout.
+  - Unavailable required fields: fail fast, except defined value exceptions.
+- **Staging:** `data_files.filters` are applied once per source; report-level `articleLevel4Name_clean` and `targetAudience` filters are reapplied per report row without leaking across reports.
+- **Matching:** exact-after-trim/value-normalized matching semantics are used.
+- **Optional exception:** `"ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ"` may be skipped when absent if at least one valid category value remains.
+
+**Verification note:** P01 runtime behavior, staging edge cases, layout preservation, and dataset-specific pivot behavior are not evidenced in this audit.
+
+## Extraction and Static Assembly
+
+- Presented pivot data range is determined after filtering (`modTreportExtract`, preferring `TableRange1` with fallback behavior as implemented).
+- Snapshot is copied as static content: values and number formats, cell formats, column widths, and row heights (as implemented).
+- Sheet formatting/layout steps include gridlines handling and optional freeze panes/zoom normalization.
+- **Verification note:** exact presented-range boundaries and visual/data fidelity (including exclusion of pivot/page-filter/PQ artifacts in all cases) are runtime-unverified.
+
+## Output Workbooks and Sheets
+
+- One output workbook is created per `reports` row.
+- Sheets are produced in `data_files` order with `report_sheet` names after placeholder substitution and sanitization.
+- Successful generation overwrites existing output artifacts as applicable (save semantics implemented in `modTreportOutput`).
+- **Sheet-name collisions (current exports):** collision tracking/checking is scoped per output workbook during `Create_report` processing (not a single global namespace across all output workbooks in the same run). This reflects current exported implementation; prior report history differed.
+- `group_rows` is deferred/no-op.
+
+## Validation, Diagnostics, and State Safety
+
+- **Deterministic validation and fail-fast:** contextual errors are raised for missing/invalid configuration, paths/files/sheets/pivots/fields, malformed/unresolvable filters/placeholders, collisions, and no-data conditions (with defined exceptions where applicable).
+- **Explicit outcomes:** workflows report success/failure via user-facing messages/status updates in the implementation.
+- **State safety:** application state is captured, adjusted for execution, and restored; cleanup paths attempt to close unsaved sources/outputs and restore UI/calculation state on failure.
+
+## Known Limitations and Unverified Areas
+
+- **Workbook/VBA parity:** workbook binaries and embedded VBA/control bindings are not inspectable here; deployed workbook state may differ from exported sources.
+- **Runtime acceptance:** end-to-end `Refresh_data`/`Create_report` runs, PQ/pivot persistence, P01 filter behavior, snapshot/output fidelity, and long-run UX are not runtime-proven.
+- **Dataset-specific behavior:** `report_wclip` `Year` vs grouped `Years` semantics and other pivot-member-dependent resolutions are unverified.
+- **Build/deployment outcome:** auxiliary build script exists but successful build/compile/sync acceptance is not evidenced (see [VBA build automation](../02-build-and-deployment/vba-build.md)).
+- **Evidence gaps:** repository tests currently provide no evidentiary `.py` sources for VBA behavior; discrepancies and verification tracking belong in `.ai/audit/problems` and `.ai/reports`, not as asserted facts in this document.
+
+## Related Docs
+
+- [VBA reporting overview](./overview.md)
+- [Configuration model](./configuration-model.md)
+- [Filters DSL](./filters-dsl.md)
+- [VBA build automation](../02-build-and-deployment/vba-build.md)

@@ -1,0 +1,76 @@
+---
+id: vba-reporting-overview
+domain: vba-reporting
+tags:
+  - vba
+  - excel
+  - reporting
+  - refresh
+  - architecture
+related:
+  - treport-configuration-model
+  - treport-filters-dsl
+  - treport-pipeline-dataflow
+  - vba-build-automation
+---
+
+## Purpose
+
+Describes the treport VBA reporting subsystem: a configuration-driven Excel macro solution for refreshing source data and generating static report workbooks. This is a high-level architecture and behavior overview based on current VBA exports and specifications; runtime outcomes are not fully verified (see [Runtime Verification Status](#runtime-verification-status)).
+
+## Main Concepts
+
+- **VBA-only runtime**: end-user workflows run natively in Excel VBA within the macro-enabled workbook (`treport.xlsm`). No external Python/PowerShell/BAT runtime is required for normal `Refresh_data` / `Create_report` execution.
+- **Entry points**: two user-facing operations are provided by `modTreportRun`:
+  - `Refresh_data` — refreshes configured source workbooks and persists refreshed data.
+  - `Create_report` — produces static output report workbooks from configured pivots/data.
+- **Configuration-driven behavior**: report inputs, file mappings, filters, layout options, and placeholder values are driven by `settings` workbook tables (see [Configuration model](./configuration-model.md)).
+- **Static report outputs**: report generation captures presented pivot data and writes static values/formats to output sheets/workbooks (see [Pipeline and data flow](./pipeline-and-dataflow.md)).
+- **Auxiliary build tooling**: modular VBA sources can be assembled into a workbook copy by a separate build script; this is a development/deployment aid, not an end-user runtime dependency (see [VBA build automation](../02-build-and-deployment/vba-build.md)).
+
+## Scope and Boundaries
+
+**In scope (implemented/defined at high level):**
+- Reading and validating configuration from `settings` ListObjects.
+- Resolving source workbooks, opening in appropriate access mode, and running refresh/report workflows.
+- Parsing/applying filter DSL and derived period/placeholder resolution.
+- Applying pivot filters and extracting static report snapshots into output workbooks.
+- Deterministic validation/fail-fast diagnostics and application-state restore/cleanup intent.
+
+**Out of scope / deferred:**
+- External runtime services or non-VBA end-user execution dependencies.
+- `group_rows` grouping behavior (present in configuration but deferred/no-op).
+
+## Component Overview
+
+Primary VBA modules under `mko_treport/src/vbs/export/` (authoritative code snapshot for this overview):
+
+| Module | Responsibility (high-level) |
+|---|---|
+| `modTreportRun.bas` | Orchestration, entry points (`Refresh_data`, `Create_report`), per-data-file processing, user-facing outcomes/status. |
+| `modTreportConfig.bas` | Configuration reading, normalization/Trim, schema/value validation, path checks, contextual fail-fast. |
+| `modTreportFiles.bas` | Source workbook resolution and workbook open/close/save session handling. |
+| `modTreportRefresh.bas` | Best-effort synchronous refresh of connections/queries/pivot caches before persisted save. |
+| `modTreportFilters.bas` | Filter DSL parsing/classification, min/max and period/placeholder resolution, data/report filter application. |
+| `modTreportPivot.bas` | Pivot/field lookup, availability and placement handling, field selection, no-data heuristics. |
+| `modTreportExtract.bas` | Presented-range detection and static snapshot copy with formatting/layout application. |
+| `modTreportOutput.bas` | Placeholder substitution, name sanitization/collision checks, sheet/workbook creation/replacement/save. |
+| `modTreportState.bas` | Capture/apply/restore Excel application state around runs. |
+| `Sheet1.cls`, `Sheet2.cls`, `ThisWorkbook.cls` | Workbook/sheet document modules (minimal exported class shells). |
+
+Data/control flow details are documented in [Pipeline and data flow](./pipeline-and-dataflow.md).
+
+## Runtime Verification Status
+
+- **Workbook binaries not inspectable in this audit**: `data/theiss/treport.xlsm`, `mko_treport/src/xls/treport.xlsm`, and `mko_treport/src/vbs/vbaProject.bin` cannot be reliably inspected for embedded VBA, control bindings, or live configuration from text tooling.
+- **Runtime unproven**: end-to-end `Refresh_data`/`Create_report` execution, Power Query/pivot persistence, pivot filter behavior (including P01/runtime cases), snapshot fidelity, output correctness, and build/compile acceptance are not evidenced by this documentation pass.
+- **Test evidence limitation**: `mko_treport/tests/` currently contains only `__pycache__` artifacts (no `.py` sources), so it is not evidentiary for current VBA behavior.
+- **Source of truth for this doc**: current exported VBA modules/scripts and specification/planning context; discrepancies and open verification items are tracked outside governed docs (e.g. `.ai/audit/problems`, `.ai/reports`).
+
+## Related Docs
+
+- [Configuration model](./configuration-model.md)
+- [Filters DSL](./filters-dsl.md)
+- [Pipeline and data flow](./pipeline-and-dataflow.md)
+- [VBA build automation](../02-build-and-deployment/vba-build.md)
+- [Documentation maintenance rules](../00-overview/doc-maintenance-rules.md)
