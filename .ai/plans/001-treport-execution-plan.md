@@ -208,5 +208,76 @@
 - Optional auxiliary scripts/tests/notes for inspection and verification (non-runtime), kept consistent with repo/workspace conventions as appropriate.
 - Local verification evidence (environment notes, run outcomes, comparisons against actual source data, issue resolutions) sufficient for B14 review/sign-off.
 
+## Implementation Tasks
+
+### Task B1 — Control/workbook preparation and runtime-boundary alignment (Implementor)
+
+- **Task ID:** `001-treport-b1`
+- **Block:** B1 (depends on B0 baseline/evidence; can proceed in parallel with B2 design/investigation)
+- **Status:** Ready for implementation
+- **Objective:** On a backed-up working copy of `treport.xlsm`, prepare the runtime control surface for rev. 5 by providing exactly two `run`-sheet entry points `Refresh_data` and `Create_report` bound to same-named VBA procedures, removing the legacy `RunXlconcat` control/obsolete workflow, and refreshing maintainability VBA exports/snapshots as auxiliary artifacts — without introducing any external runtime dependency.
+- **Primary references:** `.ai/problems/001_treport_spec.md` rev. 5 — FR-RUN-1/FR-RUN-2/FR-RUN-3, D1, D16, T9 context, R7, OQ-T4, §9.1, §13.3; `.ai/plans/001-treport-execution-plan.md` rev. 5 — B1/B12/B13 scope boundaries.
+
+#### Exact implementation scope
+
+- **In scope (semantic units / artifacts):**
+  - **Workbook artifact (working copy, local/binary):** `treport.xlsm` control workbook used for treport execution (evidence shows local/gitignored `data/theiss/treport.xlsm` and untracked `mko_treport/src/xls/treport.xlsm`; implement against the canonical working copy selected per local backup workflow and record which copy/hash was modified — do not commit workbook binaries unless explicitly requested and policy-compliant).
+  - **Worksheet/UI surface:** `run` sheet (current evidence: `Sheet2`, one Form Control button “Button 1” caption “Run Macro” bound to `[0]!RunXlconcat`). End state: exactly two controls/buttons on `run` named/labeled `Refresh_data` and `Create_report`, each bound to the VBA procedure of the same name.
+  - **VBA procedures (macro entry points):** `Public Sub Refresh_data()` and `Public Sub Create_report()` in a standard VBA module dedicated to treport run entry points/workflow orchestration (create a clearly named module if none exists, e.g. `modTreportRun`/`modRun`; avoid embedding business logic in sheet class modules). Procedure names must match control bindings exactly.
+  - **Legacy removal:** remove/replace the legacy `RunXlconcat` button/control and its binding from `run`; remove or neutralize the obsolete `xlconcat_macro`/`RunXlconcat` workflow as an invocable run entry point (do not leave a third runnable legacy control). Retain or archive legacy implementation details only if needed for historical reference, but ensure no active UI/control routes to it.
+  - **VBA project maintainability exports (auxiliary, repo-tracked):** `mko_treport/src/vbs/vbaProject.bin` and `mko_treport/src/vbs/export/*` (current: `Sheet1.cls`, `Sheet2.cls`, `ThisWorkbook.cls`, `xlconcat_macro.bas`) refreshed to reflect the post-change VBA project/control-relevant state as far as export tooling allows; record parity limitations per OQ-T4 (exports are auxiliary, runtime source of truth is `treport.xlsm`).
+  - **Local evidence (auxiliary, not committed as large binaries):** backup of the original working workbook(s), short change note (which workbook copy edited, pre/post control inventory, macro names/bindings, export steps/results) stored in an appropriate local/workspace evidence location (e.g. `.ai/tmp/...`) if useful.
+- **Out of scope for B1 (defer to later blocks):**
+  - Implementing refresh PQ/pivot persistence semantics, config parsing/validation, filters/`min`/`max`/`max_*`, file resolution/access modes, pivot extraction/paste, formatting/layout, output assembly/naming/idempotency, and full diagnostics/state restoration beyond minimal safe stubs needed so the two required entry points exist and do not invoke legacy behavior (B4–B12).
+  - Resolving OQ-T1–T3 runtime behavior in data workbooks (B2/B7–B9/B13).
+  - Adding Python/PowerShell/BAT runtime dependencies for end users (auxiliary dev/inspection tools only).
+  - Committing `data/theiss/*`, `treport.xlsm` working binaries, or generated reports.
+
+#### Implementation sequence (dependency-safe)
+
+1. **Preflight & backup (local):** identify canonical `treport.xlsm` working copy to modify; create timestamped backup(s) in a local path outside Git-tracked source (preserve original for recovery/comparison). Record macro-trust/Excel availability notes only if already known (do not block on unavailable details).
+2. **Inspect current control/VBA state (semantic):** in `treport.xlsm` VBA project, confirm `run` sheet control(s) and assignments (expect legacy `RunXlconcat`/`xlconcat_macro`), existing module/class structure, and any object names/captions that could conflict with required names.
+3. **Establish entry-point module/procedures:** add or update a standard module to declare `Public Sub Refresh_data()` and `Public Sub Create_report()` as the sole rev. 5 run entry points. If full behavior is not yet implemented (expected at B1), provide minimal, explicit, non-destructive stubs that fail fast with a clear contextual message indicating the operation is not yet implemented for rev. 5 (no legacy concatenation, no silent success) while preserving application state (align with FR-RUN-2 intent as applicable).
+4. **Replace run-sheet controls:** remove legacy button/control bound to `RunXlconcat`; create/add exactly two controls on `run` sheet assigned to `Refresh_data` and `Create_report` (names/captions/procedure bindings unambiguous). Verify no other shape/button/control on `run` invokes macros (especially legacy).
+5. **Retire legacy workflow routing:** ensure `RunXlconcat` is not reachable from `run` UI; update/rename/archive VBA artifacts as needed so the active workflow is rev. 5 entry points only (document if `xlconcat_macro` module remains in-project for reference but is not bound/called by UI).
+6. **Save & refresh maintainability exports (auxiliary):** save `treport.xlsm`; export/refresh `mko_treport/src/vbs/vbaProject.bin` and `mko_treport/src/vbs/export/*.bas|*.cls` from the modified workbook using available Excel/VBA export tooling (auxiliary). Note any elements not representable in text exports (forms, control properties/bindings) as parity gaps per OQ-T4.
+7. **Verify B1 acceptance criteria (manual/Excel + repo checks):** perform required checks below on the working copy; capture local evidence.
+
+#### Architectural and safety constraints
+
+- **Runtime boundary (mandatory):** final user-facing behavior must run in Excel/VBA only; no Python/PowerShell/BAT/external runtime dependencies introduced by B1.
+- **Minimal/atomic change:** limit modifications to control surface, entry-point procedures/stubs, legacy-run decommissioning, and auxiliary exports needed for B1; do not refactor or implement unrelated report logic.
+- **Semantic targeting:** identify workbook objects by sheet name (`run`), control names/captions/OnAction bindings, VBA procedure/module names, and ListObjects only as needed — never by line numbers or positional cell assumptions except where the `run` sheet is the designated control surface.
+- **Local artifact handling:** work on backups/working copies; do not commit large Excel workbooks or generated outputs; keep evidence local.
+- **Compatibility:** preserve existing `settings` schema/data and non-`run` workbook behavior unless explicitly required by B1; avoid breaking macro security/signature state beyond what editing requires (record observations).
+- **State safety:** stubs/entry points must not leave Excel in a degraded global state on exit/error (respect FR-RUN-2 direction where practical; full centralized handling is B12).
+
+#### Required verification / tests (proportional to risk; verify logic/interaction)
+
+- **Control/UI (Excel, manual on working copy):**
+  - `run` sheet contains exactly two macro controls/buttons: `Refresh_data` and `Create_report`.
+  - Each control is bound to the VBA procedure with the identical name (`Refresh_data` / `Create_report`).
+  - Legacy “Button 1” / `RunXlconcat` control and any binding to `[0]!RunXlconcat` or `xlconcat_macro.RunXlconcat` are absent from `run`.
+- **VBA entry points (Excel/VBA IDE):**
+  - `Public Sub Refresh_data` and `Public Sub Create_report` exist, compile in the project context, and are invocable from their controls.
+  - Invoking either entry point does not execute legacy concatenation workflow; if stubbed, it returns/fails with a clear non-destructive “not yet implemented (rev. 5/Bx)” style message and does not corrupt workbook/application state.
+- **Maintainability exports (repo/auxiliary):**
+  - `mko_treport/src/vbs/export/` and `mko_treport/src/vbs/vbaProject.bin` updated from the modified workbook; exported module/class set reflects added/renamed entry-point module(s) as applicable.
+  - Parity note recorded: control shapes/bindings may not be fully captured in text exports (OQ-T4) — runtime workbook is authoritative.
+- **Regression/sanity:**
+  - `settings` sheet and ListObjects (`general`, `reports`, `data_files`, `placeholders`) remain present and unchanged by B1 edits unless a specific B1 necessity is documented.
+  - No external runtime dependency introduced (no scripts/tools required for button execution).
+
+#### Deliverables and evidence
+
+- Modified `treport.xlsm` working copy with required controls/procedures and legacy run control removed (local, backed up).
+- Refreshed auxiliary VBA exports/snapshots in `mko_treport/src/vbs/` (+ parity note).
+- Local B1 verification note/evidence (pre/post control inventory, bindings, stub behavior observed, backup path/hash if recorded).
+
+#### Risks and gates
+
+- **Risks:** binary workbook edit/control-binding mistakes (medium), residual legacy invocation paths (low-medium), VBA export/runtime parity gaps (known, OQ-T4), environment/macro-trust differences when validating (low).
+- **Gate to B4+ integration:** B1 complete when FR-RUN-1 control/procedure surface is satisfied on the working copy and legacy `RunXlconcat` UI entry is removed; full operational behavior remains gated on B4–B13.
+
 ---
 *End of execution plan (rev. 5).*
