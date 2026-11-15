@@ -1,20 +1,20 @@
 # Execution plan: treport (001_treport)
 
 - **Plan ID:** 001-treport-execution-plan
-- **Based on (current baseline):** `.ai/problems/001_treport_spec.md` — **rev. 5** (2026-11-14), incorporating PO decisions: final runtime VBA-only with auxiliary dev tools allowed, no golden-output workbook required, `group_rows` deferred/no-op, explicit `Refresh_data`/`Create_report` run controls, `Trim` whitespace policy, optional `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ`, and evidence-driven V-007/V-018/V-008 handling.
-- **Revision lineage:** rev. 5 supersedes rev. 4 as planning/implementation baseline. Rev. 4 finalized D1–D17 and the VBA-only runtime constraint; rev. 5 clarifies runtime-vs-auxiliary tooling and resolves/adjusts open items per PO direction.
-- **Planning intent:** dependency-safe, minimal-scope, incremental decomposition into VBA implementation and verification blocks aligned to rev. 5. **No final implementation approach is chosen where runtime/Excel behavior remains technically uncertain** (exact PQ refresh completion mechanics, pivot object/selection/copy mechanics, and runtime-vs-export parity remain subject to OQ-T1–T4 validation in target Excel). No source code files are changed by this plan document; only `.ai/problems/001_treport_spec.md` and `.ai/plans/001-treport-execution-plan.md` are edited in this documentation update.
-- **Execution posture:** proceed with **VBA-compliant implementation in `treport.xlsm`** and required local/config/control updates as evidence allows. Auxiliary development tools (Python/PowerShell/BAT/etc.) may be used for inspection, workbook/pivot metadata reading, VBA extraction/analysis, testing/checking, test-data preparation, and diagnostics, but **must not become runtime dependencies** of the final user-facing solution. Large Excel workbooks/generated reports remain local/gitignored (backup/working-copy workflow); do not commit them.
+- **Based on (current baseline):** `.ai/problems/001_treport_spec.md` — **rev. 6** (2026-11-15), incorporating `.ai/problems/P01.md`: (1) pivot field availability determined by PivotTable **available fields** (not current Filters placement) with **available-but-inactive / active / unavailable** handling and in-place filtering for active fields, and (2) one-step VBA build/import deployment automation preserving modular source architecture. Rev. 6 supersedes rev. 5 while retaining rev. 5 PO decisions (VBA-only final runtime with auxiliary dev/deployment tools allowed, no golden-output workbook, `group_rows` deferred/no-op, `Refresh_data`/`Create_report` controls, `Trim`, optional `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ`, evidence-driven V-007/V-018/V-008).
+- **Revision lineage:** rev. 6 supersedes rev. 5 as planning/implementation baseline. Rev. 5 superseded rev. 4 (D1–D17, VBA-only runtime constraint).
+- **Planning intent:** dependency-safe, minimal-scope, incremental decomposition into VBA implementation and verification blocks aligned to rev. 6. **No final implementation approach is chosen where runtime/Excel behavior remains technically uncertain** (exact PQ refresh completion mechanics, pivot object/selection/copy mechanics, PivotTable available-fields/orientation runtime behavior, Excel automation/VBA project access prerequisites for build tooling, and runtime-vs-export parity remain subject to OQ-T1–T4 and FR-DEP validation). No source code files are changed by this plan document; `.ai/problems/001_treport_spec.md`, `.ai/plans/001-treport-execution-plan.md`, and `.ai/problems/P01.md` are the documentation artifacts updated for this request.
+- **Execution posture:** proceed with **VBA-compliant implementation in `treport.xlsm`** and required local/config/control updates as evidence allows. Auxiliary development/deployment tools (Python/PowerShell/BAT/etc.) may be used for inspection, workbook/pivot metadata reading, VBA extraction/analysis, testing/checking, test-data preparation, diagnostics, and **one-step build/import automation**, but **must not become runtime dependencies** of the final user-facing solution. Large Excel workbooks/generated reports remain local/gitignored (backup/working-copy workflow); do not commit them.
 
 ## Scope and guardrails
 
-- **In scope:** implement and verify rev. 5 behavior in `treport.xlsm` (Excel VBA macros/modules) for `Refresh_data` and `Create_report` using existing `settings`/`run`/ListObjects (`general`, `reports`, `data_files`, `placeholders`): config read/validation, deterministic file resolution/access modes (D1,D2), `filters` DSL parse and dependency-aware `min/max`/`max_*` resolution (D5,D6,D10,D11), evidence-based per-file field identity/alignment (V-007/V-018), filter staging/placement/matching with optional-token exception (D4,D7–D9,D12), pivot snapshot extraction and static paste (D15), formatting/layout with `group_rows` deferred/no-op (D13), output assembly/naming/placeholders/collision/idempotency with `Trim` (D3,D11,D14), fail-fast contextual diagnostics (D12), and required run controls/entry points (FR-RUN-1).
-- **Runtime boundary (mandatory):** end user runs final solution in Excel with VBA only (no Python/PowerShell/BAT/external runtime). Auxiliary dev/test/inspection scripts/tools are allowed but non-runtime.
-- **Out of scope (current):** `group_rows` color-band grouping (deferred, no-op), golden expected-output workbook, non-Excel runtimes/schedulers/UI redesign, source data/upstream PQ/model changes, committing large `data/theiss` files/results, invented requirements/mappings.
+- **In scope:** implement and verify rev. 6 behavior in `treport.xlsm` (Excel VBA macros/modules) for `Refresh_data` and `Create_report` using existing `settings`/`run`/ListObjects (`general`, `reports`, `data_files`, `placeholders`): config read/validation, deterministic file resolution/access modes (D1,D2), `filters` DSL parse and dependency-aware `min/max`/`max_*` resolution (D5,D6,D10,D11), evidence-based per-file field identity/alignment (V-007/V-018), filter staging/placement/matching with **PivotTable available-fields availability principle** and optional-token exception (D4,D7–D9,D12, P01), pivot snapshot extraction and static paste (D15), formatting/layout with `group_rows` deferred/no-op (D13), output assembly/naming/placeholders/collision/idempotency with `Trim` (D3,D11,D14), fail-fast contextual diagnostics (D12), required run controls/entry points (FR-RUN-1), and **one-step VBA build/import deployment automation** preserving modular source architecture (FR-DEP, P01).
+- **Runtime boundary (mandatory):** end user runs final solution in Excel with VBA only (no Python/PowerShell/BAT/external runtime). Auxiliary dev/test/inspection/deployment-build scripts/tools are allowed but non-runtime.
+- **Out of scope (current):** `group_rows` color-band grouping (deferred, no-op), golden expected-output workbook, non-Excel runtimes/schedulers/UI redesign, source data/upstream PQ/model changes, committing large `data/theiss` files/results, invented requirements/mappings, and any architecture redesign that physically merges modular VBA sources into one giant `.bas` or damages document components.
 - **Local artifact policy:** `data/theiss/*` and `treport.xlsm` are gitignored/local; perform changes on working copies with backups, keep originals for comparison/recovery, store evidence/results locally as appropriate.
-- **Non-runtime artifacts:** `mko_treport/src/vbs/` exports/snapshots are maintainability aids (runtime-vs-export parity unverified, OQ-T4). `mko_treport/src/scripts/` currently has no treport runtime modules; prior Python runtime modules were removed (4e60165,148b668,3d7b4c2,93e1ae4 in e040c8c). Tracked `mko_treport/tests/treport_*` and any restored/created helpers may be used as auxiliary (non-runtime) aids.
+- **Non-runtime artifacts:** `mko_treport/src/vbs/` exports/snapshots are maintainability aids (runtime-vs-export parity unverified, OQ-T4). `mko_treport/src/scripts/` currently has no treport runtime modules; prior Python runtime modules were removed (4e60165,148b668,3d7b4c2,93e1ae4 in e040c8c). Tracked `mko_treport/tests/treport_*` and any restored/created helpers/build utilities may be used as auxiliary (non-runtime) aids.
 
-## Resolved PO decisions and current evidence (rev. 5)
+## Resolved PO decisions and current evidence (rev. 5 retained + P01 rev. 6)
 
 | Topic | Decision / evidence | Planning implication |
 |---|---|---|
@@ -41,21 +41,29 @@
 - **Validator:** independent review/verification gate for correctness/risk.
 - **High-risk rule:** blocks marked **High risk** require **Auditor, Researcher, Planner, Validator** involvement as appropriate.
 
-## R1–R9 traceability (rev. 5)
+## R1–R10 traceability (rev. 6)
 
 | Risk | Summary | Blocks / handling |
 |---|---|---|
-| R1 | Pivot topology, presented ranges, year field runtime behavior (base `Year` in all files; `report_wclip` also has grouped `Years`) | B2,B5,B8,B9,B13 (evidence-based/config-aligned to `Year`; runtime validation) |
-| R2 | PQ refresh completeness/timing and connection portability | B2,B7,B13 (OQ-T2, record env/prereqs) |
-| R3 | `min`/`max` member semantics in resolved context (incl. grouped `Years`) | B2,B5,B13 (log/validate resolved values) |
+| R1 | Pivot topology, **available-fields/placement/layout preservation** (P01), presented ranges, year field runtime behavior (base `Year` in all files; `report_wclip` also has grouped `Years`) | B2,B5,B8,B9,B14 (evidence-based/config-aligned to `Year`; active fields stay in place; runtime validation) |
+| R2 | PQ refresh completeness/timing and connection portability | B2,B7,B14 (OQ-T2, record env/prereqs) |
+| R3 | `min`/`max` member semantics in resolved context (incl. grouped `Years`) | B2,B5,B14 (log/validate resolved values) |
 | R4 | `group_rows` previously conflicting — now **deferred/no-op** | B4,B10,B12 (ignore/no-op; not blocking) |
-| R5 | Copy fidelity vs actual presented source state (no golden) | B2,B9,B10,B13 (functional/source comparison) |
-| R6 | Locked/open files, permissions, save/overwrite | B6,B7,B11,B12,B13 (D1/D12, fail-fast) |
-| R7 | VBA runtime behavior/parity and legacy control removal | B1,B2,B12,B13 (FR-RUN-1, OQ-T4) |
-| R8 | Performance on large pivots | B13 (benchmark if needed; preserve semantics) |
-| R9 | Environment prerequisites (Win10+/Excel 2021+, macros, PQ) | B0,B7,B13 (record; non-blocking where inapplicable) |
+| R5 | Copy fidelity vs actual presented source state (no golden) | B2,B9,B10,B14 (functional/source comparison) |
+| R6 | Locked/open files, permissions, save/overwrite | B6,B7,B11,B12,B13,B14 (D1/D12, fail-fast, working-copy) |
+| R7 | VBA runtime behavior/parity, legacy control removal, and modular deployment integrity | B1,B2,B12,B13,B14,B15 (FR-RUN-1, FR-DEP, OQ-T4, idempotent build) |
+| R8 | Performance on large pivots | B14 (benchmark if needed; preserve semantics) |
+| R9 | Environment prerequisites (Win10+/Excel 2021+, macros, PQ, auxiliary build access prerequisites) | B0,B2,B7,B13,B14 (record; identify exact prerequisites; non-blocking where inapplicable) |
+| R10 | Excel automation constraints for one-step build/import (VBA project access, COM behavior, document-module sync) | B13,B14 (prerequisite detection/reporting, reliable sync strategy, working-copy, compile/idempotence validation) |
 
-## Logical execution blocks (B0–B14)
+## P01 additions (rev. 6)
+
+| Topic | Decision / evidence | Planning implication |
+|---|---|---|
+| **Pivot field availability/placement (P01, D7/D8/FR-FLT-4/5/6/7)** | Availability determined by PivotTable **available fields**, not current Filters placement. **Available but inactive** (in available fields, not in Filters/Columns/Rows): move to Filters then apply filtering/sorting. **Active** (already in Filters/Columns/Rows): keep in current location, apply filtering in place, never move from Columns/Rows to Filters, preserve layout. **Unavailable** (not in available fields): missing required field per D12/error rules. | Update VBA pivot/filter logic and acceptance cases so Filters placement is not used as availability gate; preserve existing layout for active fields. |
+| **One-step VBA build/import deployment automation (P01, FR-DEP)** | Preserve modular source/document identities (`modTreportConfig/Extract/Files/Filters/Output/Pivot/Refresh/Run/State.bas`, `Sheet1.cls`, `Sheet2.cls`, `ThisWorkbook.cls`); no blind concatenation, no giant merged `.bas`, no damage to document components. Single command/script or consolidated deployment workbook artifact; working copy; import/update standard modules; safe document-module sync; prevent duplicates/obsolete procedures; compile/validate where supported; save; export/update artifacts; build/verification report; repeatable/idempotent. Auxiliary tools allowed for dev/deployment only (not runtime). | Add deployment automation block and acceptance verification; treat Excel/VBA project access prerequisites as explicit build-environment requirements. |
+
+## Logical execution blocks (B0–B15)
 
 ### B0. Environment, artifact baseline & evidence capture
 - **Objective:** establish reproducible local baseline for development/verification: confirm local artifact inventory and gitignored status, capture available Excel build/macro-trust/PQ prerequisites in test environment (non-blocking where inapplicable), define evidence storage (paths/hashes/snapshots) using backup/working-copy workflow.
@@ -110,52 +118,61 @@
 - **Risks:** Impl/Rollout/Compatibility high (PQ behavior). **High risk**.
 - **Agents:** Auditor, Researcher, Planner, Validator.
 
-### B8. VBA filter application, staging & placement (FR-FLT-4/5/6/7, D4,D7–D9,D12)
-- **Objective:** apply resolved `data_files.filters` once per data file and keep; per report row apply/reapply `articleLevel4Name_clean`/`targetAudience` without leak (D8); placement in-place or add-to-Filters (D7); exact-after-trim matching (D9); implement optional `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` skip-if-absent (must not fail) while requiring ≥1 valid value selected; fail fast on missing required field/value/match or no-data per D12.
-- **Status:** **Not started (rev. 5 VBA).**
+### B8. VBA filter application, staging & placement (FR-FLT-4/5/6/7, D4,D7–D9,D12, P01)
+- **Objective:** apply resolved `data_files.filters` once per data file and keep; per report row apply/reapply `articleLevel4Name_clean`/`targetAudience` without leak (D8); determine each field's availability from the PivotTable's **available fields** (not Filters placement) and apply P01 placement: **active** (in Filters/Columns/Rows) filtered in place without moving (preserve layout), **available but inactive** moved to Filters then filtered/sorted, **unavailable** fail-fast as missing required field; exact-after-trim matching (D9); implement optional `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` skip-if-absent (must not fail) while requiring ≥1 valid value selected; fail fast on missing required field/value/match or no-data per D12.
+- **Status:** **Not started (rev. 6 VBA).**
 - **Depends on:** B5, B6, B2, B7 context where relevant.
 - **Risks:** Impl/Regression/Compatibility high. **High risk**.
 - **Agents:** Auditor, Researcher, Planner, Validator.
 
 ### B9. VBA pivot snapshot extraction & static paste (FR-RPT-3/4, D15, OQ-T3)
 - **Objective:** capture pivot presented data range after filtering (labels and grand totals as shown; exclude pivot object/page-filter area/PQ connections) and paste static values+formats (+ widths if needed) at configured position; no pivot/PQ artifacts in output.
-- **Status:** **Not started (rev. 5 VBA); fidelity validated in Excel vs actual source state.**
+- **Status:** **Not started (rev. 6 VBA); fidelity validated in Excel vs actual source state.**
 - **Depends on:** B8, B2.
 - **Risks:** Impl/Regression high. **High risk**.
 - **Agents:** Auditor, Researcher, Planner, Validator.
 
 ### B10. VBA formatting & layout (FR-RPT-5/6, D13)
 - **Objective:** apply freeze panes, zoom, hide gridlines, and required row/column sizing/state per config; blanks/no-op; `group_rows` ignored as no-op (deferred, non-blocking).
-- **Status:** **Not started (rev. 5 VBA).**
+- **Status:** **Not started (rev. 6 VBA).**
 - **Depends on:** B4, B9.
 - **Risks:** Impl/Regression medium.
 - **Agents:** Planner, Validator, Auditor.
 
 ### B11. VBA report assembly, naming, placeholders & idempotency (FR-RPT-1/2/7, FR-NAME, D3,D11,D14)
 - **Objective:** create one output workbook per report (`reports.name` + `.xlsx`, overwrite on success) with sheets in `data_files` order; substitute placeholders in `report_sheet` only (no zero-padding) using resolved `max_*`; apply `Trim`, sanitize Excel-invalid chars, enforce 31-char limit, fail fast on collisions; idempotent recreate/replace; save/close per D1.
-- **Status:** **Not started (rev. 5 VBA).**
+- **Status:** **Not started (rev. 6 VBA).**
 - **Depends on:** B5, B6, B9, B10.
 - **Risks:** Impl/Regression high. **High risk**.
 - **Agents:** Auditor, Researcher, Planner, Validator.
 
 ### B12. VBA diagnostics, run control & state safety (FR-RUN, D12)
-- **Objective:** unified contextual fail-fast error taxonomy/outcomes; ensure `run` exposes only `Refresh_data`/`Create_report` with correct bindings/procedures (legacy removed); restore application/workbook state on completion/failure; respect optional-token exception and deferred `group_rows` no-op.
-- **Status:** **Not started (rev. 5 VBA); incremental with B4–B11.**
+- **Objective:** unified contextual fail-fast error taxonomy/outcomes; ensure `run` exposes only `Refresh_data`/`Create_report` with correct bindings/procedures (legacy removed); restore application/workbook state on completion/failure; respect optional-token exception and deferred `group_rows` no-op; errors for unavailable fields must reflect PivotTable available-fields determination (P01).
+- **Status:** **Not started (rev. 6 VBA); incremental with B4–B11.**
 - **Depends on:** B1, B4–B11.
 - **Risks:** Impl/Regression medium.
 - **Agents:** Planner, Validator, Auditor.
 
-### B13. Verification & acceptance (functional, target Excel)
-- **Objective:** execute verification against functional requirements and actual source data in target Excel (Windows 10+/Excel 2021+, recorded build/macro/PQ prerequisites as available): config/Trim/naming/collision/idempotency, file resolution/access modes, refresh persistence (OQ-T2), per-file period field alignment and `min/max`/`max_*` resolution (V-007/V-018), filter staging/placement/matching/no-leak, optional `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` skip behavior and ≥1-valid requirement (V-008), no-data/fail-fast cases, presented copy/format/layout fidelity (OQ-T3), required run controls/procedures and legacy removal (FR-RUN-1), and `group_rows` no-op. Use auxiliary tools/scripts as needed for inspection/comparison (non-runtime).
-- **Status:** **Scenario preparation in scope; runtime execution pending VBA implementation and Excel validation. No golden workbook required.**
-- **Depends on:** B1–B12, B2 runtime confirmations.
+### B13. Deployment/build automation (FR-DEP, P01, auxiliary non-runtime)
+- **Objective:** deliver a one-step build/import path (single command/script) or consolidated deployment workbook artifact that assembles the complete current VBA project into a working copy of `treport.xlsm` without manual multi-module import, while preserving modular source architecture and document components.
+- **Scope:** read modular sources from `mko_treport/src/vbs/export/` (or designated export location), prepare working copy, import/update required standard modules, synchronize document-module code safely without replacing/damaging `Sheet1`/`Sheet2`/`ThisWorkbook` components, prevent duplicate modules/obsolete procedures, compile/validate VBA project where supported, save result, export/update `vbaProject.bin` and individual exports where appropriate, and produce a clear build/verification report.
+- **Constraints:** auxiliary Python/PowerShell/BAT or other suitable tools allowed for dev/deployment only (not runtime dependencies); preserve module names/declarations/references/identities; no blind `.bas` concatenation and no giant merged module redesign; working copy only, originals unchanged; identify exact prerequisites if Excel automation/VBA project access settings are required.
+- **Status:** **Not started (rev. 6).**
+- **Depends on:** B1, B12 (stable modular/exported VBA contract preferred), B2/OQ-T4 context as needed.
+- **Risks:** Impl/Compatibility/Regression medium-high (COM/Excel automation, VBA project access trust, document-module sync). **High risk**.
+- **Agents:** Auditor, Researcher, Planner, Validator.
+
+### B14. Verification & acceptance (functional, target Excel)
+- **Objective:** execute verification against functional requirements and actual source data in target Excel (Windows 10+/Excel 2021+, recorded build/macro/PQ/build-access prerequisites as available): config/Trim/naming/collision/idempotency, file resolution/access modes, refresh persistence (OQ-T2), per-file period field alignment and `min/max`/`max_*` resolution (V-007/V-018), filter staging/placement/matching/no-leak including **P01 available-fields/active-in-place/inactive-to-Filters/unavailable-fail-fast** cases, optional `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` skip behavior and ≥1-valid requirement (V-008), no-data/fail-fast cases, presented copy/format/layout fidelity (OQ-T3), required run controls/procedures and legacy removal (FR-RUN-1), `group_rows` no-op, and FR-DEP build/import acceptance (single-step, all modules present, identities preserved, compile success, controls bound, no duplicates/obsolete components, runtime VBA-only, idempotent rerun). Use auxiliary tools/scripts as needed for inspection/comparison/build (non-runtime).
+- **Status:** **Scenario preparation in scope; runtime execution pending VBA implementation, deployment automation, and Excel validation. No golden workbook required.**
+- **Depends on:** B1–B13, B2 runtime confirmations.
 - **Risks:** Compatibility/Regression high. **High risk**.
 - **Agents:** Auditor, Researcher, Planner, Validator.
 
-### B14. Independent review & readiness
-- **Objective:** independent review that delivered VBA behavior satisfies rev. 5 (D1–D18, runtime boundary, controls, deferred `group_rows`, Trim, optional filter, evidence-based field alignment) with verification evidence recorded or clearly bounded by any remaining runtime-validated unknowns; confirm no external runtime dependency introduced.
-- **Status:** **Gated on B13 evidence.**
-- **Depends on:** B1–B13.
+### B15. Independent review & readiness
+- **Objective:** independent review that delivered VBA behavior and deployment automation satisfy rev. 6 (D1–D18, P01, FR-DEP, runtime boundary, controls, deferred `group_rows`, Trim, optional filter, evidence-based field alignment, layout-preserving placement) with verification evidence recorded or clearly bounded by any remaining runtime/build-validated unknowns; confirm no external runtime dependency introduced.
+- **Status:** **Gated on B14 evidence.**
+- **Depends on:** B1–B14.
 - **Agents:** Validator (lead), Planner/Auditor/Researcher as needed.
 
 ## Execution order and dependency DAG
@@ -167,56 +184,61 @@
 5. **B5** (VBA filters parse/resolve, `min/max`/`max_*`, verified fields) — depends B4,B2. *(high risk)*
 6. **B6** (VBA file resolution/access/session) — depends B4,B2. *(high risk)*
 7. **B7** (VBA refresh) — depends B6,B2. *(high risk)*
-8. **B8** (VBA filter apply/staging/placement + optional token) — depends B5,B6,B2. *(high risk)*
+8. **B8** (VBA filter apply/staging/placement per P01 + optional token) — depends B5,B6,B2. *(high risk)*
 9. **B9** (VBA pivot snapshot/static paste) — depends B8,B2. *(high risk)*
 10. **B10** (VBA formatting/layout, `group_rows` no-op) — depends B4,B9.
 11. **B11** (VBA assembly/naming/placeholders/idempotency) — depends B5,B6,B9,B10. *(high risk)*
-12. **B12** (diagnostics/state safety, control reconciliation) — incremental B4–B11, finalize before B13.
-13. **B13** (functional verification in target Excel, no golden) — depends B1–B12 and B2 runtime confirmations. *(high risk)*
-14. **B14** (independent review/readiness) — depends B13.
+12. **B12** (diagnostics/state safety, control reconciliation) — incremental B4–B11, finalize before B13/B14.
+13. **B13** (one-step VBA build/import deployment automation, FR-DEP) — depends B1,B12 and stable modular exports; can be prepared in parallel with late implementation hardening once module contracts stabilize. *(high risk)*
+14. **B14** (functional verification in target Excel, no golden, incl. P01 and FR-DEP acceptance) — depends B1–B13 and B2 runtime confirmations. *(high risk)*
+15. **B15** (independent review/readiness) — depends B14.
 
-**Parallel opportunities:** B1 ∥ B2; B5 ∥ B6 after B4; B10/B12 can progress incrementally as extraction/assembly contracts stabilize; verification scenario design can proceed in parallel with implementation.
+**Parallel opportunities:** B1 ∥ B2; B5 ∥ B6 after B4; B10/B12 can progress incrementally as extraction/assembly contracts stabilize; B13 design/prototyping can proceed once modular source layout and control/procedure contracts are stable; verification scenario design (including P01 placement cases and deployment idempotence) can proceed in parallel with implementation.
 
 ## Verification approach (D18, no golden workbook)
 
 - **Primary method:** compare generated outputs against actual source pivot presented state/data in target Excel for the same resolved configuration/filters (values, labels/totals, sheet/workbook names/structure, formatting/layout properties as specified).
-- **Evidence to record locally:** Excel build/version, macro-trust/PQ prerequisites relevant to run, fixed config snapshot (incl. any per-file filter alignment applied), input data/workbook state identifiers (paths/timestamps/hashes where practical), output artifacts, and observed results/screenshots/notes.
-- **Auxiliary tooling:** may use Python/PowerShell/BAT or other tools to inspect workbooks, read metadata, compare extracted values/structures, and automate checks; these are non-runtime aids only.
-- **Environment note:** do not block unrelated development if a specific environment detail is not yet recorded, provided it does not affect the current task; capture it when performing runtime-dependent validation.
+- **P01 placement verification:** include cases where configured filter fields are available-but-inactive, active in Filters, and active in Rows/Columns; confirm inactive fields move to Filters, active fields remain in place with filtering applied, no active Row/Column field is relocated, and unavailable required fields fail fast per D12. Use actual pivot states or auxiliary workbook inspection/prep (non-runtime) to construct/confirm cases.
+- **Deployment/build verification (FR-DEP):** verify single command/script (or accepted consolidated artifact) on a working copy includes all current modular VBA sources, preserves identities/responsibilities, preserves `Sheet1`/`Sheet2`/`ThisWorkbook`, compiles/validates where supported, exposes correctly bound `Refresh_data`/`Create_report`, leaves no duplicates/obsolete components, produces usable `treport.xlsm` with no external runtime dependency, and is idempotent on repeated runs.
+- **Evidence to record locally:** Excel build/version, macro-trust/PQ/build-access prerequisites relevant to run, fixed config snapshot (incl. any per-file filter alignment applied), input data/workbook state identifiers (paths/timestamps/hashes where practical), output artifacts, build reports, and observed results/screenshots/notes.
+- **Auxiliary tooling:** may use Python/PowerShell/BAT or other tools to inspect workbooks, read metadata, compare extracted values/structures, automate build/import, and run checks; these are non-runtime aids only.
+- **Environment note:** do not block unrelated development if a specific environment detail is not yet recorded, provided it does not affect the current task; capture it when performing runtime/build-dependent validation.
 
 ## Cross-cutting risks and containment
 
-- **Runtime boundary breach:** keep all end-user behavior in VBA; treat helpers/tests/scripts as auxiliary only.
-- **Incorrect period-field mapping:** use evidenced per-file identities (`Year` for m/w, grouped `Years` for wclip), align config per row, validate in Excel, no guessed mapping.
+- **Runtime boundary breach:** keep all end-user behavior in VBA; treat helpers/tests/scripts/build tools as auxiliary only.
+- **Incorrect period-field mapping:** use evidenced per-file identities (`Year` for m/w/wclip base field per config/evidence), validate in Excel, no guessed mapping.
+- **P01 placement/layout regression:** never use Filters placement as availability gate; never move active Row/Column fields to Filters; verify available-but-inactive move-to-Filters path.
 - **Optional token mishandling:** `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` must be skipped if absent and never fail alone; require ≥1 valid selected value.
 - **Legacy control remnants:** remove/replace `RunXlconcat` completely per FR-RUN-1.
 - **`group_rows` scope creep:** enforce no-op/deferred behavior only.
+- **Deployment automation damage:** no blind concatenation, preserve module/document identities, use working copies, prevent duplicates/obsolete procedures, validate compile and rerun idempotence.
 - **PQ refresh staleness/portability:** validate synchronous completion and persisted results in target Excel; document prerequisites/paths issues.
 - **Local-only artifacts:** backup before edits, preserve originals, avoid committing large Excel/generated files.
 
-## Definition of Ready / implementation start (rev. 5)
+## Definition of Ready / implementation start (rev. 6)
 
-- **Ready to proceed:** Yes. PO decisions D1–D18 (rev. 5) are specified; key clarifications (controls, Trim, `group_rows` deferral, optional filter, no-golden validation, auxiliary-tools policy, local handling) are resolved; V-007/V-018/V-008 have evidence-based determinations and config is aligned to `Year` for all files (user-updated).
-- **Not blocking start:** recording exact Excel build/PQ prerequisites where inapplicable to a current task, and Excel-runtime confirmation details (OQ-T2/T3/T4) not yet executed — complete them during relevant implementation/verification steps.
-- **Must complete for sign-off:** VBA implementation per rev. 5, runtime-verified `Year`-based field/config alignment in target Excel for all files including `report_wclip` (or explicitly escalated genuine business ambiguity with concrete alternatives), successful functional verification against actual source data including required controls/refresh/filter/copy/format/naming/idempotency/error behaviors, and confirmation of no external runtime dependency.
+- **Ready to proceed:** Yes. PO decisions D1–D18 (rev. 5) and P01 rev. 6 clarifications are specified (pivot available-fields placement principle and one-step modular VBA deployment automation); key clarifications (controls, Trim, `group_rows` deferral, optional filter, no-golden validation, auxiliary-tools policy, local handling) are resolved; V-007/V-018/V-008 have evidence-based determinations and config is aligned to `Year` for all files (user-updated).
+- **Not blocking start:** recording exact Excel build/PQ/build-access prerequisites where inapplicable to a current task, and Excel-runtime/build confirmation details (OQ-T2/T3/T4, FR-DEP automation prerequisites) not yet executed — complete them during relevant implementation/verification steps.
+- **Must complete for sign-off:** VBA implementation per rev. 6, runtime-verified `Year`-based field/config alignment and P01 placement behavior in target Excel, successful functional verification against actual source data (including required controls/refresh/filter/copy/format/naming/idempotency/error behaviors), FR-DEP one-step idempotent deployment acceptance, and confirmation of no external runtime dependency.
 
 ## Expected deliverables
 
-- Updated VBA implementation in `treport.xlsm` (working copy, with backups/evidence) providing `Refresh_data`/`Create_report` per rev. 5 and removing legacy `RunXlconcat` workflow.
-- Per-file config/field alignment applied as evidenced (esp. year-field filters/`max_year` derivation) and validated.
-- Refreshed VBA exports/snapshots in `mko_treport/src/vbs/` as maintainability aids (auxiliary, parity noted).
+- Updated VBA implementation in `treport.xlsm` (working copy, with backups/evidence) providing `Refresh_data`/`Create_report` per rev. 6 (including P01 placement behavior) and removing legacy `RunXlconcat` workflow.
+- One-step auxiliary build/import utility and/or consolidated deployment workbook artifact satisfying FR-DEP, with build/verification report and idempotent rerun behavior (working-copy based, no runtime dependency).
+- Refreshed modular VBA exports/snapshots in `mko_treport/src/vbs/` as maintainability aids (auxiliary, parity noted), consistent with preserved module identities.
 - Optional auxiliary scripts/tests/notes for inspection and verification (non-runtime), kept consistent with repo/workspace conventions as appropriate.
-- Local verification evidence (environment notes, run outcomes, comparisons against actual source data, issue resolutions) sufficient for B14 review/sign-off.
+- Local verification evidence (environment notes, P01 placement cases, build reports, run outcomes, comparisons against actual source data, issue resolutions) sufficient for B15 review/sign-off.
 
-## Implementation Tasks
+## Implementation Tasks (historical B1 task record, rev. 5 context)
 
 ### Task B1 — Control/workbook preparation and runtime-boundary alignment (Implementor)
 
 - **Task ID:** `001-treport-b1`
 - **Block:** B1 (depends on B0 baseline/evidence; can proceed in parallel with B2 design/investigation)
 - **Status:** Ready for implementation
-- **Objective:** On a backed-up working copy of `treport.xlsm`, prepare the runtime control surface for rev. 5 by providing exactly two `run`-sheet entry points `Refresh_data` and `Create_report` bound to same-named VBA procedures, removing the legacy `RunXlconcat` control/obsolete workflow, and refreshing maintainability VBA exports/snapshots as auxiliary artifacts — without introducing any external runtime dependency.
-- **Primary references:** `.ai/problems/001_treport_spec.md` rev. 5 — FR-RUN-1/FR-RUN-2/FR-RUN-3, D1, D16, T9 context, R7, OQ-T4, §9.1, §13.3; `.ai/plans/001-treport-execution-plan.md` rev. 5 — B1/B12/B13 scope boundaries.
+- **Objective (rev. 5):** On a backed-up working copy of `treport.xlsm`, prepare the runtime control surface by providing exactly two `run`-sheet entry points `Refresh_data` and `Create_report` bound to same-named VBA procedures, removing the legacy `RunXlconcat` control/obsolete workflow, and refreshing maintainability VBA exports/snapshots as auxiliary artifacts — without introducing any external runtime dependency. **Rev. 6 note:** task remains valid baseline work; subsequent blocks must also satisfy P01 (available-fields placement, FR-DEP deployment automation).
+- **Primary references:** `.ai/problems/001_treport_spec.md` rev. 5/rev. 6 — FR-RUN-1/FR-RUN-2/FR-RUN-3, D1, D16, T9 context, R7, OQ-T4, §9.1, §13.3; `.ai/plans/001-treport-execution-plan.md` rev. 6 — B1/B12–B15 scope boundaries.
 
 #### Exact implementation scope
 
@@ -228,8 +250,8 @@
   - **VBA project maintainability exports (auxiliary, repo-tracked):** `mko_treport/src/vbs/vbaProject.bin` and `mko_treport/src/vbs/export/*` (current: `Sheet1.cls`, `Sheet2.cls`, `ThisWorkbook.cls`, `xlconcat_macro.bas`) refreshed to reflect the post-change VBA project/control-relevant state as far as export tooling allows; record parity limitations per OQ-T4 (exports are auxiliary, runtime source of truth is `treport.xlsm`).
   - **Local evidence (auxiliary, not committed as large binaries):** backup of the original working workbook(s), short change note (which workbook copy edited, pre/post control inventory, macro names/bindings, export steps/results) stored in an appropriate local/workspace evidence location (e.g. `.ai/tmp/...`) if useful.
 - **Out of scope for B1 (defer to later blocks):**
-  - Implementing refresh PQ/pivot persistence semantics, config parsing/validation, filters/`min`/`max`/`max_*`, file resolution/access modes, pivot extraction/paste, formatting/layout, output assembly/naming/idempotency, and full diagnostics/state restoration beyond minimal safe stubs needed so the two required entry points exist and do not invoke legacy behavior (B4–B12).
-  - Resolving OQ-T1–T3 runtime behavior in data workbooks (B2/B7–B9/B13).
+  - Implementing refresh PQ/pivot persistence semantics, config parsing/validation, filters/`min`/`max`/`max_*`, file resolution/access modes, pivot extraction/paste, formatting/layout, output assembly/naming/idempotency, P01 filter placement behavior, FR-DEP deployment automation, and full diagnostics/state restoration beyond minimal safe stubs needed so the two required entry points exist and do not invoke legacy behavior (B4–B13).
+  - Resolving OQ-T1–T3 runtime behavior in data workbooks (B2/B7–B9/B14).
   - Adding Python/PowerShell/BAT runtime dependencies for end users (auxiliary dev/inspection tools only).
   - Committing `data/theiss/*`, `treport.xlsm` working binaries, or generated reports.
 
@@ -237,9 +259,9 @@
 
 1. **Preflight & backup (local):** identify canonical `treport.xlsm` working copy to modify; create timestamped backup(s) in a local path outside Git-tracked source (preserve original for recovery/comparison). Record macro-trust/Excel availability notes only if already known (do not block on unavailable details).
 2. **Inspect current control/VBA state (semantic):** in `treport.xlsm` VBA project, confirm `run` sheet control(s) and assignments (expect legacy `RunXlconcat`/`xlconcat_macro`), existing module/class structure, and any object names/captions that could conflict with required names.
-3. **Establish entry-point module/procedures:** add or update a standard module to declare `Public Sub Refresh_data()` and `Public Sub Create_report()` as the sole rev. 5 run entry points. If full behavior is not yet implemented (expected at B1), provide minimal, explicit, non-destructive stubs that fail fast with a clear contextual message indicating the operation is not yet implemented for rev. 5 (no legacy concatenation, no silent success) while preserving application state (align with FR-RUN-2 intent as applicable).
+3. **Establish entry-point module/procedures:** add or update a standard module to declare `Public Sub Refresh_data()` and `Public Sub Create_report()` as the sole required run entry points. If full behavior is not yet implemented (expected at B1), provide minimal, explicit, non-destructive stubs that fail fast with a clear contextual message indicating the operation is not yet implemented (no legacy concatenation, no silent success) while preserving application state (align with FR-RUN-2 intent as applicable).
 4. **Replace run-sheet controls:** remove legacy button/control bound to `RunXlconcat`; create/add exactly two controls on `run` sheet assigned to `Refresh_data` and `Create_report` (names/captions/procedure bindings unambiguous). Verify no other shape/button/control on `run` invokes macros (especially legacy).
-5. **Retire legacy workflow routing:** ensure `RunXlconcat` is not reachable from `run` UI; update/rename/archive VBA artifacts as needed so the active workflow is rev. 5 entry points only (document if `xlconcat_macro` module remains in-project for reference but is not bound/called by UI).
+5. **Retire legacy workflow routing:** ensure `RunXlconcat` is not reachable from `run` UI; update/rename/archive VBA artifacts as needed so the active workflow is only `Refresh_data`/`Create_report` (document if `xlconcat_macro` module remains in-project for reference but is not bound/called by UI).
 6. **Save & refresh maintainability exports (auxiliary):** save `treport.xlsm`; export/refresh `mko_treport/src/vbs/vbaProject.bin` and `mko_treport/src/vbs/export/*.bas|*.cls` from the modified workbook using available Excel/VBA export tooling (auxiliary). Note any elements not representable in text exports (forms, control properties/bindings) as parity gaps per OQ-T4.
 7. **Verify B1 acceptance criteria (manual/Excel + repo checks):** perform required checks below on the working copy; capture local evidence.
 
@@ -260,7 +282,7 @@
   - Legacy “Button 1” / `RunXlconcat` control and any binding to `[0]!RunXlconcat` or `xlconcat_macro.RunXlconcat` are absent from `run`.
 - **VBA entry points (Excel/VBA IDE):**
   - `Public Sub Refresh_data` and `Public Sub Create_report` exist, compile in the project context, and are invocable from their controls.
-  - Invoking either entry point does not execute legacy concatenation workflow; if stubbed, it returns/fails with a clear non-destructive “not yet implemented (rev. 5/Bx)” style message and does not corrupt workbook/application state.
+  - Invoking either entry point does not execute legacy concatenation workflow; if stubbed, it returns/fails with a clear non-destructive “not yet implemented” style message and does not corrupt workbook/application state.
 - **Maintainability exports (repo/auxiliary):**
   - `mko_treport/src/vbs/export/` and `mko_treport/src/vbs/vbaProject.bin` updated from the modified workbook; exported module/class set reflects added/renamed entry-point module(s) as applicable.
   - Parity note recorded: control shapes/bindings may not be fully captured in text exports (OQ-T4) — runtime workbook is authoritative.
@@ -277,7 +299,7 @@
 #### Risks and gates
 
 - **Risks:** binary workbook edit/control-binding mistakes (medium), residual legacy invocation paths (low-medium), VBA export/runtime parity gaps (known, OQ-T4), environment/macro-trust differences when validating (low).
-- **Gate to B4+ integration:** B1 complete when FR-RUN-1 control/procedure surface is satisfied on the working copy and legacy `RunXlconcat` UI entry is removed; full operational behavior remains gated on B4–B13.
+- **Gate to B4+ integration:** B1 complete when FR-RUN-1 control/procedure surface is satisfied on the working copy and legacy `RunXlconcat` UI entry is removed; full operational behavior remains gated on B4–B14 (rev. 6), including P01 and FR-DEP acceptance.
 
 ---
-*End of execution plan (rev. 5).*
+*End of execution plan (rev. 6).*
