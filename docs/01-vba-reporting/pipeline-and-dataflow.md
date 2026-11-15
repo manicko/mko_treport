@@ -74,7 +74,7 @@ High-level semantics as specified/implemented in exported modules (`modTreportPi
   - Unavailable required fields: fail fast, except defined value exceptions.
 - **Staging:** `data_files.filters` are applied once per source; report-level `articleLevel4Name_clean` and `targetAudience` filters are reapplied per report row without leaking across reports.
 - **Matching:** exact-after-trim/value-normalized matching semantics are used.
-- **Optional exception:** `"ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ"` may be skipped when absent if at least one valid category value remains.
+- **Generalized `articleLevel4Name_clean` multi-value behavior (report-level):** when multiple values are configured (split by `general.delimeter`), any configured token not found among available pivot items is ignored. If at least one configured value matches, the matched subset is applied and processing proceeds for that report. If none of the configured values match in that report context, the run emits a warning with context (e.g. report/data-file) and skips that report without producing its output for that processing step, then continues with other reports (does not fail the whole run). `targetAudience` remains subject to its existing strict handling.
 
 **Verification note:** P01 runtime behavior, staging edge cases, layout preservation, and dataset-specific pivot behavior are not evidenced in this audit.
 

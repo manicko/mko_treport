@@ -56,9 +56,8 @@ Filters consist of clauses separated by `|`.
 
 ## Application Contexts
 
-- **Data-file filters (`data_files.filters`)**: parsed/resolved and applied once per source data file context during processing.
 - **Report-level filters**: report attributes (e.g. `articleLevel4Name_clean`, `targetAudience`) are applied per report/output context without leaking across reports.
-- **Optional value handling**: implementation includes optional skip handling for the token `"ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ"` when absent, provided at least one valid value remains (exact runtime behavior unverified).
+- **Generalized `articleLevel4Name_clean` multi-value handling (report-level):** values are split by `general.delimeter` and matched exactly-after-trim to available pivot items. If at least one configured value is present/valid, the matched subset is applied and report generation proceeds. If none of the configured values are present/valid for that report context, emit a warning (including report/file context) and skip that report; continue with other reports without failing the whole run. `targetAudience` remains strict (missing/unmatchable required values fail fast unless separately specified).
 
 ## Validation and Fail-fast
 

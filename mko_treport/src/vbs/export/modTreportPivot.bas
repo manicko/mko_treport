@@ -162,7 +162,7 @@ Public Function CollectionHas(ByVal col As Collection, ByVal key As String) As B
     On Error GoTo 0
 End Function
 
-Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String, ByVal desired As Collection, ByVal allowOptionalSkip As Boolean, ByVal ctx As String)
+Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String, ByVal desired As Collection, ByVal skipMissingTokensIfAnyMatch As Boolean, ByVal skipReportIfNoMatches As Boolean, ByVal ctx As String)
     Dim pf As PivotField
     Dim avail As Collection
     Dim wanted As Object
@@ -191,8 +191,8 @@ Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String
             matchedKey = FindMatchingAvailable(avail, tok)
             If Len(matchedKey) > 0 Then
                 If Not wanted.Exists(matchedKey) Then wanted.Add matchedKey, True
-            ElseIf allowOptionalSkip And modTreportFilters.IsOptionalSkipToken(tok) Then
-                ' Optional value absent is allowed only when caller permits skip (e.g. articleLevel4Name_clean).
+            ElseIf skipMissingTokensIfAnyMatch Then
+                ' Generalized articleLevel4Name_clean rule: ignore configured tokens absent from pivot items.
             Else
                 modTreportConfig.Fail 2406, ctx & ",field='" & fieldName & "'", "Required filter value '" & tok & "' was not found among available pivot items."
             End If
@@ -201,6 +201,11 @@ NextTok:
     Next i
 
     If wanted.Count = 0 Then
+        If skipReportIfNoMatches Then
+            ' No configured values matched available pivot items for this report context:
+            ' orchestrator must warn and skip this report, continue with others (not a whole-run failure).
+            modTreportConfig.Fail 2411, ctx & ",field='" & fieldName & "'", "No matching configured values found for report filter '" & fieldName & "'; skip this report."
+        End If
         modTreportConfig.Fail 2407, ctx & ",field='" & fieldName & "'", "No valid values remain selected for filter."
     End If
 
@@ -230,7 +235,12 @@ NextTok:
             Exit For
         End If
     Next i
-    If Not anyWantedVisible Then modTreportConfig.Fail 2407, ctx & ",field='" & fieldName & "'", "No valid values remain selected for filter (after matching)."
+    If Not anyWantedVisible Then
+        If skipReportIfNoMatches Then
+            modTreportConfig.Fail 2411, ctx & ",field='" & fieldName & "'", "No matching configured values found for report filter '" & fieldName & "' after matching; skip this report."
+        End If
+        modTreportConfig.Fail 2407, ctx & ",field='" & fieldName & "'", "No valid values remain selected for filter (after matching)."
+    End If
 
     ' Second pass: apply wanted set in place without changing field orientation.
     For i = 1 To pf.PivotItems.Count

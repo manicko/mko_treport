@@ -28,25 +28,12 @@ Public Type ResolvedContext
 End Type
 
 
-Public Function IsOptionalSkipToken(ByVal token As String) As Boolean
-    Dim t As String
-    t = modTreportConfig.Norm(token)
-    ' V-008: "ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ" optional if absent
-    If Len(t) = 0 Then Exit Function
-    If StrComp(t, ChrW$(1047) & ChrW$(1059) & ChrW$(1041) & ChrW$(1053) & ChrW$(1040) & ChrW$(1071) & " " & _
-               ChrW$(1055) & ChrW$(1040) & ChrW$(1057) & ChrW$(1058) & ChrW$(1040) & " " & _
-               ChrW$(1044) & ChrW$(1051) & ChrW$(1071) & " " & _
-               ChrW$(1044) & ChrW$(1045) & ChrW$(1058) & ChrW$(1045) & ChrW$(1049), vbBinaryCompare) = 0 Then
-        IsOptionalSkipToken = True
-        Exit Function
-    End If
-    ' robust fallback marker
-    If InStr(1, t, ChrW$(1044) & ChrW$(1051) & ChrW$(1071) & " " & ChrW$(1044) & ChrW$(1045) & ChrW$(1058) & ChrW$(1045) & ChrW$(1049), vbBinaryCompare) > 0 Then
-        If InStr(1, t, ChrW$(1047) & ChrW$(1059) & ChrW$(1041) & ChrW$(1053) & ChrW$(1040) & ChrW$(1071), vbBinaryCompare) > 0 Then
-            IsOptionalSkipToken = True
-        End If
-    End If
-End Function
+' Generalized articleLevel4Name_clean multi-value rule:
+' - for report-level articleLevel4Name_clean selections, any configured token not found
+'   among available pivot items is ignored (matched subset is applied)
+' - if none of the configured tokens match, the caller must skip that report with warning
+'   (error 2411) and continue other reports; this is not a whole-run failure.
+' targetAudience and data-file filters remain strict (missing required values fail-fast).
 
 Public Function SplitReportValues(ByVal raw As String, ByVal delim As String) As Variant
     Dim arr() As String, i As Long, n As Long, outArr() As String
@@ -292,7 +279,8 @@ End Sub
 Private Sub ApplySingleClauseSelection(ByVal pt As PivotTable, ByRef c As ParsedClause, ByVal delim As String, ByRef rc As ResolvedContext, ByVal ctx As String)
     Dim desired As Collection
     Set desired = BuildDesiredValues(pt, c, rc, ctx)
-    modTreportPivot.ApplyFieldSelection pt, c.fieldName, desired, False, ctx
+    ' data_files.filters remain strict: missing/unmatchable required values fail-fast.
+    modTreportPivot.ApplyFieldSelection pt, c.fieldName, desired, False, False, ctx
 End Sub
 
 Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedClause, ByRef rc As ResolvedContext, ByVal ctx As String) As Collection
@@ -362,15 +350,18 @@ Public Sub ApplyReportFilters(ByVal pt As PivotTable, ByRef rep As modTreportCon
     Dim colTa As New Collection
     Dim i As Long
 
+    ' articleLevel4Name_clean (report-level, multi-value): generalized rule -
+    ' apply matched subset of configured tokens; if none match, signal report-skip (2411).
     arr = SplitReportValues(rep.ArticleLevel4NameClean, delim)
     For i = LBound(arr) To UBound(arr)
         colCat.Add CStr(arr(i))
     Next i
-    modTreportPivot.ApplyFieldSelection pt, "articleLevel4Name_clean", colCat, True, ctx & ",field='articleLevel4Name_clean'"
+    modTreportPivot.ApplyFieldSelection pt, "articleLevel4Name_clean", colCat, True, True, ctx & ",field='articleLevel4Name_clean'"
 
+    ' targetAudience behavior unchanged (strict).
     arr = SplitReportValues(rep.TargetAudience, delim)
     For i = LBound(arr) To UBound(arr)
         colTa.Add CStr(arr(i))
     Next i
-    modTreportPivot.ApplyFieldSelection pt, "targetAudience", colTa, False, ctx & ",field='targetAudience'"
+    modTreportPivot.ApplyFieldSelection pt, "targetAudience", colTa, False, False, ctx & ",field='targetAudience'"
 End Sub
