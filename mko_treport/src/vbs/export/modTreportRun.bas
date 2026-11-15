@@ -4,7 +4,7 @@ Option Explicit
 ' treport rev.5 run entry points (FR-RUN-1)
 ' Final runtime: Excel VBA only. Auxiliary dev tools must not be runtime dependencies.
 
-Private Const OPTIONAL_MISSING_TOKEN As String = "ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ"
+Private Const OPTIONAL_MISSING_TOKEN As String = ChrW$(1047) & ChrW$(1059) & ChrW$(1041) & ChrW$(1053) & ChrW$(1040) & ChrW$(1071) & " " & ChrW$(1055) & ChrW$(1040) & ChrW$(1057) & ChrW$(1058) & ChrW$(1040) & " " & ChrW$(1044) & ChrW$(1051) & ChrW$(1071) & " " & ChrW$(1044) & ChrW$(1045) & ChrW$(1058) & ChrW$(1045) & ChrW$(1049)
 
 Public Sub Refresh_data()
     Dim st As modTreportState.AppState
@@ -14,6 +14,9 @@ Public Sub Refresh_data()
     Dim srcPath As String
     Dim wbSrc As Workbook
     Dim ctx As String
+    Dim eNum As Long
+    Dim eDesc As String
+    Dim eSrc As String
 
     st = modTreportState.CaptureState()
     On Error GoTo EH
@@ -40,8 +43,9 @@ Public Sub Refresh_data()
     MsgBox "Refresh_data completed successfully.", vbInformation, "treport"
     Exit Sub
 EH:
-    Dim eNum As Long, eDesc As String, eSrc As String
-    eNum = Err.Number: eDesc = Err.Description: eSrc = Err.Source
+    eNum = Err.Number
+    eDesc = Err.Description
+    eSrc = Err.Source
     On Error Resume Next
     If Not wbSrc Is Nothing Then wbSrc.Close SaveChanges:=False
     Application.StatusBar = False
@@ -53,14 +57,23 @@ End Sub
 Public Sub Create_report()
     Dim st As modTreportState.AppState
     Dim cfg As modTreportConfig.TreportConfig
-    Dim inputFolder As String, outputFolder As String
-    Dim i As Long, r As Long
+    Dim inputFolder As String
+    Dim outputFolder As String
+    Dim i As Long
+    Dim r As Long
     Dim srcPath As String
     Dim wbSrc As Workbook
     Dim outBooks() As Workbook
     Dim outNames() As String
     Dim ctx As String
     Dim fileCtx As String
+    Dim outUsedSheetNames() As Object
+    Dim dictNames As Object
+    Dim rn As String
+    Dim eNum2 As Long
+    Dim eDesc2 As String
+    Dim eSrc2 As String
+    Dim k As Long
 
     st = modTreportState.CaptureState()
     On Error GoTo EH
@@ -74,14 +87,11 @@ Public Sub Create_report()
 
     ReDim outBooks(LBound(cfg.Reports) To UBound(cfg.Reports))
     ReDim outNames(LBound(cfg.Reports) To UBound(cfg.Reports))
-    Dim outUsedSheetNames() As Object
     ReDim outUsedSheetNames(LBound(cfg.Reports) To UBound(cfg.Reports))
 
     ' precompute unique trimmed output/report names and create workbooks
-    Dim dictNames As Object
     Set dictNames = CreateObject("Scripting.Dictionary")
     For r = LBound(cfg.Reports) To UBound(cfg.Reports)
-        Dim rn As String
         rn = modTreportOutput.SanitizeFileName(cfg.Reports(r).Name, "Create_report/reports[row=" & cfg.Reports(r).RowIndex & "]")
         If dictNames.Exists(LCase$(rn)) Then
             modTreportConfig.Fail 2611, "Create_report/reports[row=" & cfg.Reports(r).RowIndex & ",name='" & cfg.Reports(r).Name & "']", "Report file name collision after Trim/sanitization: '" & rn & "'."
@@ -115,11 +125,11 @@ Public Sub Create_report()
     MsgBox "Create_report completed successfully. Output folder: " & outputFolder, vbInformation, "treport"
     Exit Sub
 EH:
-    Dim eNum2 As Long, eDesc2 As String, eSrc2 As String
-    eNum2 = Err.Number: eDesc2 = Err.Description: eSrc2 = Err.Source
+    eNum2 = Err.Number
+    eDesc2 = Err.Description
+    eSrc2 = Err.Source
     On Error Resume Next
     If Not wbSrc Is Nothing Then wbSrc.Close SaveChanges:=False
-    Dim k As Long
     If (Not Not outBooks) <> 0 Then
         For k = LBound(outBooks) To UBound(outBooks)
             If Not outBooks(k) Is Nothing Then outBooks(k).Close SaveChanges:=False

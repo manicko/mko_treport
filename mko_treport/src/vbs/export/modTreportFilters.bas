@@ -1,32 +1,6 @@
 Attribute VB_Name = "modTreportFilters"
 Option Explicit
 
-Public Type ParsedClause
-    fieldName As String
-    RawExpr As String
-    Kind As String
-    ScalarValue As String
-    RangeStart As String
-    RangeEnd As String
-    ListValues() As String
-    HasList As Boolean
-End Type
-
-Public Type ParsedFilters
-    Clauses() As ParsedClause
-    Count As Long
-End Type
-
-Public Type ResolvedContext
-    YearFieldName As String
-    MaxYear As Variant
-    MaxMonth As Variant
-    MaxWeek As Variant
-    HasYear As Boolean
-    HasMonth As Boolean
-    HasWeek As Boolean
-End Type
-
 Public Function IsOptionalSkipToken(ByVal token As String) As Boolean
     Dim t As String
     t = modTreportConfig.Norm(token)
@@ -79,6 +53,32 @@ Private Function StripOuterParens(ByVal expr As String) As String
     End If
     StripOuterParens = s
 End Function
+
+Public Type ParsedClause
+    fieldName As String
+    RawExpr As String
+    Kind As String
+    ScalarValue As String
+    RangeStart As String
+    RangeEnd As String
+    ListValues() As String
+    HasList As Boolean
+End Type
+
+Public Type ParsedFilters
+    Clauses() As ParsedClause
+    Count As Long
+End Type
+
+Public Type ResolvedContext
+    YearFieldName As String
+    MaxYear As Variant
+    MaxMonth As Variant
+    MaxWeek As Variant
+    HasYear As Boolean
+    HasMonth As Boolean
+    HasWeek As Boolean
+End Type
 
 Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ctx As String)
     Dim e As String, inner As String, parts() As String, i As Long
