@@ -31,6 +31,8 @@ Public Function TryGetPivotField(ByVal pt As PivotTable, ByVal fieldName As Stri
 End Function
 
 Public Function GetPivotFieldRequired(ByVal pt As PivotTable, ByVal fieldName As String, ByVal ctx As String) As PivotField
+    ' P01/D7/D12: availability is presence in PivotTable available fields (pt.PivotFields).
+    ' A found-but-hidden/unplaced field is available; missing from PivotFields is unavailable.
     Dim pf As PivotField
     Set pf = TryGetPivotField(pt, fieldName)
     If pf Is Nothing Then
@@ -38,6 +40,66 @@ Public Function GetPivotFieldRequired(ByVal pt As PivotTable, ByVal fieldName As
     End If
     Set GetPivotFieldRequired = pf
 End Function
+
+Private Function GetPivotFieldOrientation(ByVal pf As PivotField) As Long
+    ' Best-effort orientation read; unexpected errors treated as hidden/unplaced.
+    On Error Resume Next
+    GetPivotFieldOrientation = pf.Orientation
+    If Err.Number <> 0 Then
+        Err.Clear
+        GetPivotFieldOrientation = xlHidden
+    End If
+    On Error GoTo 0
+End Function
+
+Private Function IsActiveFilterOrientation(ByVal orient As Long) As Boolean
+    ' P01/D7: active when already placed in Filters/Columns/Rows.
+    IsActiveFilterOrientation = (orient = xlPageField Or orient = xlRowField Or orient = xlColumnField)
+End Function
+
+Private Function IsInactiveAvailableOrientation(ByVal orient As Long) As Boolean
+    ' P01/D7: available-but-inactive when present in available fields but not placed in Filters/Columns/Rows.
+    IsInactiveAvailableOrientation = (orient = xlHidden Or orient = 0)
+End Function
+
+Private Sub SortPivotFieldAscending(ByVal pf As PivotField)
+    ' P01 best-effort: required sorting when moving available-but-inactive field to Filters/page area.
+    ' Regular pivots: attempt ascending label sort. Guarded for unsupported/OLAP cases so runtime continues.
+    On Error Resume Next
+    Err.Clear
+    pf.AutoSort xlAscending, pf.Name
+    If Err.Number <> 0 Then
+        Err.Clear
+        pf.AutoSort xlAscending, pf.SourceName
+    End If
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+Private Sub EnsureFilterPlacement(ByVal pf As PivotField, ByRef wasInactiveMovedToPage As Boolean)
+    ' P01/D7/D8: classify by available-field orientation.
+    ' Active (page/row/column): keep in current location, never move.
+    ' Available-but-inactive (hidden/unplaced): move to Filters area (xlPageField) and sort best-effort.
+    ' Unexpected placed states (e.g. data field): do not move; selection path guards behavior.
+    Dim orient As Long
+    wasInactiveMovedToPage = False
+    orient = GetPivotFieldOrientation(pf)
+    If IsActiveFilterOrientation(orient) Then Exit Sub
+    If IsInactiveAvailableOrientation(orient) Then
+        On Error Resume Next
+        Err.Clear
+        pf.Orientation = xlPageField
+        If Err.Number = 0 Then
+            wasInactiveMovedToPage = True
+            On Error GoTo 0
+            SortPivotFieldAscending pf
+            Exit Sub
+        End If
+        Err.Clear
+        On Error GoTo 0
+    End If
+    ' Unknown/unexpected orientation: preserve existing layout (no speculative move).
+End Sub
 
 Public Function FieldAvailableValues(ByVal pf As PivotField) As Collection
     Dim col As New Collection
@@ -100,19 +162,6 @@ Public Function CollectionHas(ByVal col As Collection, ByVal key As String) As B
     On Error GoTo 0
 End Function
 
-Public Sub EnsureFilterPlacement(ByVal pf As PivotField)
-    On Error Resume Next
-    Dim o As Long
-    o = pf.Orientation
-    If Err.Number <> 0 Then
-        Err.Clear
-        pf.Orientation = xlPageField
-    Else
-        If o = xlHidden Or o = 0 Then pf.Orientation = xlPageField
-    End If
-    On Error GoTo 0
-End Sub
-
 Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String, ByVal desired As Collection, ByVal allowOptionalSkip As Boolean, ByVal ctx As String)
     Dim pf As PivotField
     Dim avail As Collection
@@ -120,9 +169,14 @@ Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String
     Dim i As Long
     Dim tok As String, itemName As String
     Dim anyWantedVisible As Boolean
+    Dim orient As Long
+    Dim movedToPage As Boolean
 
+    ' P01: resolve from available fields only; unavailable => 2403 (D12).
     Set pf = GetPivotFieldRequired(pt, fieldName, ctx)
-    EnsureFilterPlacement pf
+    EnsureFilterPlacement pf, movedToPage
+    orient = GetPivotFieldOrientation(pf)
+
     Set avail = FieldAvailableValues(pf)
     Set wanted = CreateObject("Scripting.Dictionary")
     wanted.CompareMode = vbBinaryCompare
@@ -138,7 +192,7 @@ Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String
             If Len(matchedKey) > 0 Then
                 If Not wanted.Exists(matchedKey) Then wanted.Add matchedKey, True
             ElseIf allowOptionalSkip And modTreportFilters.IsOptionalSkipToken(tok) Then
-                ' skip optional absent
+                ' Optional value absent is allowed only when caller permits skip (e.g. articleLevel4Name_clean).
             Else
                 modTreportConfig.Fail 2406, ctx & ",field='" & fieldName & "'", "Required filter value '" & tok & "' was not found among available pivot items."
             End If
@@ -152,18 +206,25 @@ NextTok:
 
     On Error GoTo EH
     pt.ManualUpdate = True
+
+    ' P01/D8: field-scoped clear only (never pt.ClearAllFilters). Preserve layout for active row/column/page fields.
     On Error Resume Next
-    pf.EnableMultiplePageItems = True
-    Err.Clear
     pf.ClearAllFilters
     Err.Clear
     pf.ClearManualFilter
     Err.Clear
+    If orient = xlPageField Then
+        ' Page/filter field: multi-select is page-field behavior; keep existing capability for regular pivots.
+        pf.EnableMultiplePageItems = True
+        Err.Clear
+    End If
     On Error GoTo EH
 
+    ' First pass: ensure at least one wanted item is visible before hiding others.
     For i = 1 To pf.PivotItems.Count
         itemName = modTreportConfig.Norm(pf.PivotItems(i).Name)
         If IsWantedItem(wanted, itemName) Then
+            On Error GoTo EH
             pf.PivotItems(i).Visible = True
             anyWantedVisible = True
             Exit For
@@ -171,6 +232,7 @@ NextTok:
     Next i
     If Not anyWantedVisible Then modTreportConfig.Fail 2407, ctx & ",field='" & fieldName & "'", "No valid values remain selected for filter (after matching)."
 
+    ' Second pass: apply wanted set in place without changing field orientation.
     For i = 1 To pf.PivotItems.Count
         itemName = modTreportConfig.Norm(pf.PivotItems(i).Name)
         If IsWantedItem(wanted, itemName) Then

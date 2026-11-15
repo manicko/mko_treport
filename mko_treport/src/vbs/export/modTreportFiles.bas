@@ -1,55 +1,30 @@
 Attribute VB_Name = "modTreportFiles"
 Option Explicit
 
-' treport rev.5 - file resolution and workbook open/close helpers (B6, D1,D2)
+' treport rev.5 - file resolution and workbook open/close helpers (B6, D1, D2, FR-FILE-1/FR-FILE-2)
 
 Public Function ResolveDataFilePath(ByVal inputFolder As String, ByVal baseName As String) As String
-    Dim fso As Object, exts As Variant, i As Long
-    Dim foundPath As String, foundExtIndex As Long, foundCount As Long
+    Dim fso As Object
+    Dim exts As Variant
     Dim allMatches As Collection
+    Dim ctx As String
+
     Set fso = CreateObject("Scripting.FileSystemObject")
-    exts = Array(".xlsx", ".xlsm", ".xlsb") ' precedence D2
+    exts = Array(".xlsx", ".xlsm", ".xlsb")
+    ctx = "files/data_file='" & baseName & "',input_path='" & inputFolder & "'"
 
     Set allMatches = CollectMatchingFiles(fso, inputFolder, baseName, exts)
     If allMatches.Count = 0 Then
-        modTreportConfig.Fail 2201, "files/data_file='" & baseName & "',input_path='" & inputFolder & "'", _
+        modTreportConfig.Fail 2201, ctx, _
             "No matching data file found (checked .xlsx,.xlsm,.xlsb in input_path and subfolders)."
     End If
 
-    ' choose best by extension precedence, fail if more than one at same best precedence or any ambiguity by best-resolved path set
-    Dim bestIdx As Long, bestPath As String, bestCount As Long
-    bestIdx = 999: bestPath = vbNullString: bestCount = 0
-    Dim j As Long, extIdx As Long, p As String
-    For j = 1 To allMatches.Count
-        p = CStr(allMatches(j))
-        extIdx = ExtPrecedenceIndex(p, exts)
-        If extIdx < bestIdx Then
-            bestIdx = extIdx
-            bestPath = p
-            bestCount = 1
-        ElseIf extIdx = bestIdx Then
-            If StrComp(p, bestPath, vbTextCompare) <> 0 Then bestCount = bestCount + 1
-        End If
-    Next j
-
-    If bestCount <> 1 Then
-        modTreportConfig.Fail 2202, "files/data_file='" & baseName & "',input_path='" & inputFolder & "'", _
-            "Multiple matching data files found for base name (ambiguous)."
+    If allMatches.Count <> 1 Then
+        modTreportConfig.Fail 2202, ctx & ",matches=" & allMatches.Count, _
+            "Multiple matching data files found for base name; expected exactly one match within input_path/subfolders."
     End If
-    ResolveDataFilePath = bestPath
-End Function
 
-Private Function ExtPrecedenceIndex(ByVal path As String, ByRef exts As Variant) As Long
-    Dim fso As Object, e As String, i As Long
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    e = "." & LCase$(fso.GetExtensionName(path))
-    For i = LBound(exts) To UBound(exts)
-        If StrComp(e, CStr(exts(i)), vbTextCompare) = 0 Then
-            ExtPrecedenceIndex = i
-            Exit Function
-        End If
-    Next i
-    ExtPrecedenceIndex = 999
+    ResolveDataFilePath = CStr(allMatches(1))
 End Function
 
 Private Function CollectMatchingFiles(ByVal fso As Object, ByVal folderPath As String, ByVal baseName As String, ByRef exts As Variant) As Collection

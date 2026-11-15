@@ -74,6 +74,8 @@ Public Sub Create_report()
 
     ReDim outBooks(LBound(cfg.Reports) To UBound(cfg.Reports))
     ReDim outNames(LBound(cfg.Reports) To UBound(cfg.Reports))
+    Dim outUsedSheetNames() As Object
+    ReDim outUsedSheetNames(LBound(cfg.Reports) To UBound(cfg.Reports))
 
     ' precompute unique trimmed output/report names and create workbooks
     Dim dictNames As Object
@@ -87,6 +89,8 @@ Public Sub Create_report()
         dictNames.Add LCase$(rn), True
         outNames(r) = rn
         Set outBooks(r) = Application.Workbooks.Add(xlWBATWorksheet)
+        ' Per-output-workbook namespace for final sheet names across all data_files (D3/D14).
+        Set outUsedSheetNames(r) = CreateObject("Scripting.Dictionary")
     Next r
 
     For i = LBound(cfg.DataFiles) To UBound(cfg.DataFiles)
@@ -94,7 +98,7 @@ Public Sub Create_report()
         Application.StatusBar = "treport: " & fileCtx
         srcPath = modTreportFiles.ResolveDataFilePath(inputFolder, cfg.DataFiles(i).DataFile)
         Set wbSrc = modTreportFiles.OpenWorkbookReadOnly(srcPath)
-        ProcessDataFile cfg, i, wbSrc, srcPath, fileCtx, outBooks, outNames, outputFolder
+        ProcessDataFile cfg, i, wbSrc, srcPath, fileCtx, outBooks, outNames, outputFolder, outUsedSheetNames
         modTreportFiles.CloseNoSave wbSrc
         Set wbSrc = Nothing
     Next i
@@ -127,7 +131,7 @@ EH:
     MsgBox "Create_report failed." & vbCrLf & "Source: " & eSrc2 & vbCrLf & "Error: " & eNum2 & vbCrLf & eDesc2, vbCritical, "treport"
 End Sub
 
-Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal dfIdx As Long, ByVal wbSrc As Workbook, ByVal srcPath As String, ByVal fileCtx As String, ByRef outBooks() As Workbook, ByRef outNames() As String, ByVal outputFolder As String)
+Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal dfIdx As Long, ByVal wbSrc As Workbook, ByVal srcPath As String, ByVal fileCtx As String, ByRef outBooks() As Workbook, ByRef outNames() As String, ByVal outputFolder As String, ByRef outUsedSheetNames() As Object)
     Dim ws As Worksheet
     Dim pt As PivotTable
     Dim pf As ParsedFilters
@@ -136,18 +140,15 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
     Dim sheetName As String
     Dim outWs As Worksheet
     Dim pr As Long, pc As Long
-    Dim usedNames As Object
 
     Set ws = modTreportPivot.GetDataSheet(wbSrc, cfg.DataFiles(dfIdx).DataSheet, fileCtx & ",path='" & srcPath & "'")
     Set pt = modTreportPivot.GetPrimaryPivot(ws, fileCtx & ",path='" & srcPath & "'")
 
-    Set pf = modTreportFilters.ParseAndClassify(cfg.DataFiles(dfIdx).Filters, cfg.General.Delimeter, fileCtx)
+    pf = modTreportFilters.ParseAndClassify(cfg.DataFiles(dfIdx).Filters, cfg.General.Delimeter, fileCtx)
     rc = modTreportFilters.ResolveMinMaxAndYear(pt, pf, fileCtx)
 
     ' Apply data-file filters once (D8)
     modTreportFilters.ApplyDataFileFilters pt, pf, cfg.General.Delimeter, rc, fileCtx
-
-    Set usedNames = CreateObject("Scripting.Dictionary")
 
     For r = LBound(cfg.Reports) To UBound(cfg.Reports)
         Dim repCtx As String
@@ -163,10 +164,12 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
 
         sheetName = modTreportOutput.SubstitutePlaceholders(cfg.DataFiles(dfIdx).ReportSheet, rc.MaxYear, rc.MaxMonth, rc.MaxWeek, repCtx)
         sheetName = modTreportOutput.SanitizeSheetName(sheetName, repCtx)
-        If usedNames.Exists(LCase$(sheetName)) Then
-            modTreportConfig.Fail 2612, repCtx, "Sheet name collision in output workbook after substitution/sanitization: '" & sheetName & "'."
+        ' D14: fail fast on true collision within the same output workbook namespace;
+        ' identical final names across different output workbooks are allowed (D-01).
+        If outUsedSheetNames(r).Exists(LCase$(sheetName)) Then
+            modTreportConfig.Fail 2612, repCtx & ",output='" & outNames(r) & "'", "Sheet name collision in output workbook after substitution/sanitization: '" & sheetName & "'."
         End If
-        usedNames.Add LCase$(sheetName), True
+        outUsedSheetNames(r).Add LCase$(sheetName), True
 
         pr = 1: pc = 1
         If IsNumeric(cfg.DataFiles(dfIdx).pasteRow) And Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).pasteRow)) > 0 Then pr = CLng(cfg.DataFiles(dfIdx).pasteRow)
