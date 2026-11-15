@@ -33,7 +33,7 @@ Public Sub Refresh_data()
     Dim srcPath As String
     Dim wbSrc As Workbook
     Dim ctx As String
-    Dim eNum As Long
+    Dim errNumber As Long
     Dim eDesc As String
     Dim eSrc As String
 
@@ -62,7 +62,7 @@ Public Sub Refresh_data()
     MsgBox "Refresh_data completed successfully.", vbInformation, "treport"
     Exit Sub
 EH:
-    eNum = Err.Number
+    errNumber = Err.Number
     eDesc = Err.Description
     eSrc = Err.Source
     On Error Resume Next
@@ -70,7 +70,7 @@ EH:
     Application.StatusBar = False
     modTreportState.RestoreState st
     On Error GoTo 0
-    MsgBox "Refresh_data failed." & vbCrLf & "Source: " & eSrc & vbCrLf & "Error: " & eNum & vbCrLf & eDesc, vbCritical, "treport"
+    MsgBox "Refresh_data failed." & vbCrLf & "Source: " & eSrc & vbCrLf & "Error: " & errNumber & vbCrLf & eDesc, vbCritical, "treport"
 End Sub
 
 Public Sub Create_report()

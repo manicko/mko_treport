@@ -23,6 +23,9 @@
 8. **Meaningful & Consistent Naming**  
     Use clear, concise, and consistent names for files, functions, components, and variables.
 
+9. **VBA Identifier Safety**  
+   VBA identifiers are case-insensitive. Before adding or renaming any variable, constant, procedure, parameter, type, or other identifier in VBA, verify that the chosen name (in any letter case or abbreviation form) does not collide with a VBA reserved keyword, statement, built-in function, type, or object name (for example, `eNum` is interpreted as `Enum`). Use a distinct, non-reserved name to avoid compile-time syntax errors.
+
 17. **Workspace Cleanliness**  
     Before creating any file, ask: 1) Is there an exact place for this in the task or module architecture? 2) Is it needed for project operation and future maintenance? If both are no — write only to `.ai/tmp`.
 
