@@ -15,7 +15,7 @@
 
 - **Runtime:** final solution VBA-only inside `treport.xlsm`; end user must not need Python/PowerShell/BAT/external runtime. Auxiliary dev/inspection/test tools are allowed but non-runtime.
 - **Run controls:** exactly two buttons/entry points `Refresh_data` and `Create_report`; legacy `RunXlconcat`/obsolete workflow removed from `run`.
-- **Decisions fixed:** D1–D18 (access modes, deterministic file resolution `.xlsx/.xlsm/.xlsb`, one output per report, filter DSL/staging/placement, `min/max` + `max_*` dependency-aware resolution, `Trim`, optional `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` skip-if-absent with ≥1 valid value, fail-fast diagnostics, presented-range static copy, naming/sanitization/31-char/collision rules, no golden workbook, `group_rows` deferred/no-op).
+- **Decisions fixed:** D1–D18 (access modes, deterministic file resolution `.xlsx/.xlsm/.xlsb`, one output per report, filter DSL/staging/placement, `min/max` + `max_*` dependency-aware resolution, `Trim`, generalized `articleLevel4Name_clean` multi-value behavior (matched subset if any configured token matches; if none match warn and skip that report, continue others, no whole-run failure), fail-fast diagnostics, presented-range static copy, naming/sanitization/31-char/collision rules, no golden workbook, `group_rows` deferred/no-op).
 - **Evidence-based alignment:** `data_files.filters` use `Year` for all rows (user-updated, aligned); `report_wclip` has grouped `Years` in addition to base `Year` — runtime behavior must be validated, no guessed mapping.
 - **Local artifacts:** `data/theiss` workbooks are local/gitignored; modify on working copies/backups, keep originals, do not commit large Excel/generated outputs.
 
@@ -29,7 +29,7 @@
 - **Parity note (OQ-T4):** exports are auxiliary; control shapes/bindings are authoritative in the workbook binary and may not be fully represented in `.bas/.cls`.
 
 ### 3.2 B2 — Technical investigation (partial)
-- Read-only auditor/researcher analysis produced: pivot/field/layout/member evidence for `report_m/report_w/report_wclip` (base `Year` in all; `report_wclip` has grouped `Years`; `Month Number`, `Week Number`, `articleLevel4Name_clean`, `targetAudience` present; `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` not observed as distinct cache item in inspected evidence → optional-skip consistent), PQ/external-cache presence, and VBA technique guidance for sync refresh/filter/copy/state handling. Local research artifact: `.ai/tmp/context_b2_research.md` (referenced in session).
+- Read-only auditor/researcher analysis produced: pivot/field/layout/member evidence for `report_m/report_w/report_wclip` (base `Year` in all; `report_wclip` has grouped `Years`; `Month Number`, `Week Number`, `articleLevel4Name_clean`, `targetAudience` present; `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` not observed as distinct cache item in inspected evidence (historical example; consistent with generalized rev.6 handling when other configured tokens match)), PQ/external-cache presence, and VBA technique guidance for sync refresh/filter/copy/state handling. Local research artifact: `.ai/tmp/context_b2_research.md` (referenced in session).
 - Direct COM/ZIP inspections (read-only) performed against `data/theiss/monthly/report_m.xlsx`, `weekly/report_w.xlsx`, `base/report_wclip.xlsx` and workbook config.
 - **Not completed:** runtime confirmation of PQ completion/persistence, actual presented-range bounds/fidelity, and `Year`-vs-grouped-`Years` behavior in `report_wclip` during live filtering/extraction (OQ-T1–T3).
 
@@ -37,8 +37,8 @@
 Modules added/implemented in `mko_treport/src/vbs/export/` and imported into workbook/project:
 - `modTreportConfig.bas` — `Norm/Trim`, config types, ListObject/sheet lookup, required schema/value validation (`general/reports/data_files/placeholders`), contextual `Fail`, input/output path normalization helpers, `group_rows` read/no-op.
 - `modTreportFiles.bas` — deterministic base-name resolution with precedence `.xlsx,.xlsm,.xlsb`; **recursive match search under `input_path` subfolders** (supports `monthly/weekly/base` layout) with ambiguity/fail-fast checks; read-only/writable open, close/save helpers (D1,D2).
-- `modTreportFilters.bas` — filter DSL parse/classify (`|`, `field = expr`, scalar/range/list, `min/max`, inclusive numeric ranges, `&` lists), duplicate/empty checks, dependency-aware resolution (resolve/apply `Year` context first when present, derive `max_monthnum`/`max_weeknum`), placeholder-bound resolution helpers, report filter splitting, **optional token detection for `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` via `ChrW` markers** (V-008).
-- `modTreportPivot.bas` — sheet/pivot/field discovery, numeric/trim member matching, placement (keep orientation if set, else page/filter) (D7), selection application/reset with optional-skip support and reduced forced refresh during toggling, pivot data-empty heuristic.
+- `modTreportFilters.bas` — filter DSL parse/classify (`|`, `field = expr`, scalar/range/list, `min/max`, inclusive numeric ranges, `&` lists), duplicate/empty checks, dependency-aware resolution (resolve/apply `Year` context first when present, derive `max_monthnum`/`max_weeknum`), placeholder-bound resolution helpers, report filter splitting. **Historical note:** token-specific optional detection for `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` existed in earlier snapshots; current exports implement generalized `articleLevel4Name_clean` matched-subset/report-skip behavior (rev.6).
+- `modTreportPivot.bas` — sheet/pivot/field discovery, numeric/trim member matching, placement (keep orientation if set, else page/filter) (D7), selection application/reset with generalized `articleLevel4Name_clean` matched-subset/report-skip signaling (rev.6) and reduced forced refresh during toggling, pivot data-empty heuristic.
 - `modTreportRefresh.bas` — refresh scaffold: set non-background where possible, `RefreshAll`, `CalculateUntilAsyncQueriesDone`, wait/timeout loops, pivot cache/table refresh attempts (B7, OQ-T2 pending validation).
 - `modTreportExtract.bas` — presented range selection (`TableRange1` fallback), static copy/paste (values+number formats, formats, column widths, row heights), sheet formatting (gridlines off, freeze panes, zoom handling).
 - `modTreportOutput.bas` — placeholder substitution in `report_sheet` only (no zero-padding), `Trim`/sanitize names, 31-char/collision checks, output workbook/sheet create/replace, save/overwrite helpers.
@@ -52,7 +52,7 @@ Modules added/implemented in `mko_treport/src/vbs/export/` and imported into wor
 ## 4. Git and workspace state (observed)
 
 ### 4.1 Relevant commits
-- `57ae40e` — `fix(treport): improve file resolution, optional filter handling, and pivot refresh stability`
+- `57ae40e` — `fix(treport): improve file resolution, optional filter handling, and pivot refresh stability` (historical; later generalized rev.6 `articleLevel4Name_clean` rule applied in source exports)
 - `cf2c4e3` — `chore(treport): remove stale auxiliary Python tests for removed runtime modules`
 - `fe2c05b` — `feat(treport): implement VBA config, refresh, and report generation pipeline`
 - `dba8639` — `feat(treport): complete B1 run controls in workbook`
@@ -76,7 +76,7 @@ Modules added/implemented in `mko_treport/src/vbs/export/` and imported into wor
 | `Create_report` probe (silent harness) | temp workbook, output to `.ai/tmp/*` | **Fail (expected by D14)** | `DOLGIT` vs `DOLGIT ` collided after Trim/sanitization → fail-fast reported correctly. |
 | `Create_report` probe | temp workbook | **Fail (fixed)** | `report_m/report_w/report_wclip` not found in flat `input_path`; fixed by recursive subfolder search. |
 | `Create_report` probe | temp workbook | **Fail (fixed)** | `PivotTable.RefreshTable` failed (1004) in early path; mitigated by reducing forced refresh/update during filtering. |
-| `Create_report` probe | temp workbook | **Fail (fixed)** | Optional token `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` misdetected as required-missing due to Cyrillic literal handling; fixed with `ChrW` matching. |
+| `Create_report` probe | temp workbook | **Fail (fixed, historical)** | Optional token `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` misdetected as required-missing due to Cyrillic literal handling; fixed in that snapshot. Superseded by rev.6 generalized `articleLevel4Name_clean` matched-subset/report-skip behavior. |
 | `Create_report` latest probe | `.ai/tmp/treport_live_test3.xlsm`, output `.ai/tmp/live_output3` | **Inconclusive / running** | `settings!Z10=RUNNING`, `live_output3` empty, Excel PIDs `5520,19828` still present at report time. No confirmed success/failure. |
 | `Refresh_data` end-to-end | — | **Not run** | Not executed to avoid uncontrolled writable changes; requires controlled validation. |
 | Manual UI button click / visible Excel verification | — | **Not recorded** | Controls verified via COM object model only. |
@@ -151,7 +151,7 @@ Address defects found in Step 1, likely areas:
 - Pivot refresh/update sequencing and `ManualUpdate` safety (avoid 1004/hangs) while preserving correctness.
 - `Year` resolution/application for `report_wclip` with grouped `Years` present (validate base `Year` field path; escalate only genuine residual business ambiguity with concrete alternatives).
 - Member matching/availability in resolved-year context for `Month Number`/`Week Number` ranges and `min/max`.
-- No-data detection accuracy, optional-token behavior (V-008), report-filter reset/leak prevention (D8).
+- No-data detection accuracy, generalized `articleLevel4Name_clean` matched-subset/report-skip behavior (V-008, rev.6), report-filter reset/leak prevention (D8).
 - Presented-range boundaries (`TableRange1`/page-filter exclusion), static copy fidelity, and formatting application without pivot objects/PQ artifacts.
 - Progress/status/timeout-safe behavior and contextual errors.
 **Per fix:** edit `mko_treport/src/vbs/export/*.bas`, import into backed-up workbook copy, save, re-export components and refresh `mko_treport/src/vbs/vbaProject.bin`, sync tracked `mko_treport/src/xls/treport.xlsm` as needed, commit tracked code/export changes atomically.
@@ -163,7 +163,7 @@ Address defects found in Step 1, likely areas:
 ### Step 4 — B13 functional verification (`Create_report`)
 Run on target Excel against actual source data (backed-up originals) and verify:
 - Correct data files resolved/opened read-only and closed without save.
-- Per-file filters applied once, per-report filters reapplied without leakage; optional `ЗУБНАЯ ПАСТА ДЛЯ ДЕТЕЙ` skipped if absent with ≥1 valid value selected.
+- Per-file filters applied once, per-report filters reapplied without leakage; generalized `articleLevel4Name_clean` multi-value rule: if any configured token matches apply matched subset, if none match warn and skip that report (continue other reports, no whole-run failure).
 - Correct `min/max` and `max_*` (`max_year`, `max_weeknum`, `max_monthnum`) per D10/D11 and placeholder substitution in `report_sheet` only.
 - One `.xlsx` per report, deterministic overwrite/idempotent rerun, 3 sheets per workbook in `data_files` order, correct names/sanitization/31-char behavior.
 - Static values+formats (+widths/row heights as required), no pivot objects/PQ connections, formatting (freeze/zoom/gridlines), `group_rows` no-op.
@@ -186,6 +186,6 @@ Run on target Excel against actual source data (backed-up originals) and verify:
 ## 10. Definition of done for implementation completion
 
 - `treport.xlsm` provides working VBA-only `Refresh_data` and `Create_report` with required run controls and no legacy run binding.
-- B13 passes functionally against actual source data in target Excel (including resolved P2 collision handling, `report_wclip` behavior, optional token, `Trim`, naming/idempotency, static copy/format, refresh persistence as applicable).
+- B13 passes functionally against actual source data in target Excel (including resolved P2 collision handling, `report_wclip` behavior, generalized `articleLevel4Name_clean` matched-subset/report-skip behavior, `Trim`, naming/idempotency, static copy/format, refresh persistence as applicable).
 - Evidence recorded locally (environment, hashes, outputs, observations); tracked VBA exports/bin/workbook copy synced as appropriate; no external runtime dependency introduced.
 - B14 independent validation accepted with no unresolved critical/high defects.
