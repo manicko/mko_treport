@@ -1,192 +1,46 @@
-# Subagents
-Max allowed parallel subagents = 2
-Only 1 implementor agent is allowed at a time.
-Do not launch agents in background.
-If stop or break prefer resume old session not launching new agent.
+# Agent instructions (VBA / Excel) — English
 
-# Project Commands
+## Context: “cannot compile” when Excel is installed
+- **Excel installed does not mean** an external process can compile/check VBA. Common blockers: **Trust Center** must allow **Trust access to the VBA project object model (VBOM)**; macro/security policies (Protected View, blocked macros from internet, disabled content); Office edition/policies differ by machine; **no stable, universal COM API** to run “Compile VBAProject” identically across Office builds/locales (scripts may try VBE CommandBars/menu/reflection and still be best-effort).
+- Many “I cannot compile” messages come from: missing VBOM trust, running without an interactive Excel session that permits the action, or confusing **VBA syntax compile** (L2) with **runtime/functional** checks (L3). Distinguish these in every report.
 
-**Env:** Windows 11 · `uv` (Python) · PostgreSQL 18 in Docker · Vue/React frontend (npm)
+## Repository facts (this project)
+- VBA export sources (edit these): `mko_treport/src/vbs/export/*.bas`, `*.cls`
+- Workbooks: `data/theiss/treport.xlsm`, `mko_treport/src/xls/treport.xlsm` (treat as sensitive; use backups/working copies)
+- Build/sync script: `mko_treport/src/scripts/build_treport_vba.ps1` (see `docs/02-build-and-deployment/vba-build.md`)
+- Build reports: `.ai/tmp/build_treport_vba_*.txt`
 
-`.\Makefile.ps1 <target>` (PowerShell 7+) is the canonical entry point. Every
-invocation runs `docker compose` against an explicit project name (`-p mkobi` for
-dev, `-p mkobi-test` for the test stack) — the script never mutates
-`$env:COMPOSE_PROJECT_NAME`. There is no GNU `Makefile` and no `make` wrapper in
-this repo.
+## Required workflow when you change VBA exports
+1. **Backup / working copy first.** Never edit canonical workbooks blindly for verification. Prefer:
+   ```powershell
+   .\mko_treport\src\scripts\build_treport_vba.ps1 `
+     -SourceWorkbook "data\theiss\treport.xlsm" `
+     -WorkCopyPath ".ai\tmp\treport_vba_check_<YYYYMMDD_HHMMSS>.xlsm" `
+     -BackupDir ".ai\tmp" `
+     -ReportPath ".ai\tmp\build_treport_vba_<YYYYMMDD_HHMMSS>.txt"
+   ```
+   Adjust parameters to match the script/help if needed. Always record the report path.
 
-The compose file paths and `--env-file` are resolved against the directory that
-holds the script (`$PSScriptRoot`), not the current working directory, so the
-script behaves the same from the repo root or a shell rooted elsewhere. Run it
-from the repo root by convention (`.\Makefile.ps1 <target>`); `$BackupDir` and
-`frontend` npm targets still use paths relative to the working directory.
+2. **L1 — automated sync/import (script):** review the generated report for import/legacy/duplicate issues and the **Compile/validation** note (best-effort). If it reports missing VBOM access, state clearly: enable **Trust access to the VBA project object model** in Excel Trust Center (Macro Settings), close Excel, retry. Note corporate policies may block this.
 
-## Quick start
+3. **L2 — manual compile in Excel (required for “compiles” claim):** open the **working copy** `.xlsm` in Excel → VBA Editor → **Debug → Compile VBAProject**.  
+   - If clean: record file path, date/time, and “L2 passed (manual VBE Compile)”.  
+   - If errors: paste/fix from exports, re-run L1 on a new working copy, repeat until resolved (or report blockers precisely).
 
-**This environment is Windows 11** — use `.\Makefile.ps1` in PowerShell 7+.
+4. **L3 — functional checks (when logic/run behavior changes):** test `Refresh_data` / `Create_report` on **copies** of data/workbooks only (do not corrupt originals). Verify expected outputs and that source files remain unchanged per project rules.
 
-| Task | Command |
-|---|---|
-| Dev up (app :8010 + Vite :5173) | `.\Makefile.ps1 up` |
-| Stop dev stack | `.\Makefile.ps1 down` |
-| Start test services (test-db :15434, test-redis :6381) | `.\Makefile.ps1 test-up` |
-| Full test suite | `.\Makefile.ps1 test` |
-| Full suite with live coverage gate | `.\Makefile.ps1 test-all` |
-| Fresh test schema (after migration changes) | `.\Makefile.ps1 test-fresh` |
-| Stop test stack | `.\Makefile.ps1 test-down` |
+5. **Syncing canonical artifacts:** only after L2 (and L3 if applicable) consider syncing exports/bin via script options (e.g. default sync behavior per docs) — do **not** overwrite canonical state without an explicit task/approval in context.
 
-`head` and `tail` commands are not working in PowerShell.
+## What to report after VBA edits (always)
+- List changed files under `mko_treport/src/vbs/export/`.
+- Exact `build_treport_vba.ps1` command used (or why not run).
+- Path to build report and short summary (SUCCESS/ISSUES/ERROR; note VBOM issues if any).
+- L2 result: done (with file/time) / not done (state this is a limitation, not proof of compilation).
+- L3 result if performed, or “not performed”.
 
-## Python (local, PowerShell)
+## Do not
+- Claim “compiled successfully” based only on the script’s best-effort `VBProject.Compile` call without L2 when a user asks for verification.
+- Run or request running macros on production/original data without working copies and explicit need.
 
-| Task | Command |
-|---|---|
-| Lint | `uv run ruff check <path>` |
-| Auto-fix (incl. import sorting, I001) | `uv run ruff check --fix <path>` |
-| Typecheck | `uv run mypy <path>` |
-| Add dep | `uv add <pkg>` / `uv add --dev <pkg>` |
-
-> `ruff check --fix` handles import sorting (I001). `ruff format` only reformats
-> (line wraps, quotes) and does **NOT** sort imports — `.\Makefile.ps1 format`
-> runs `ruff check --fix src/ tests/`, not `ruff format`.
-
-## Tests
-
-`.\Makefile.ps1 test` — the canonical gate — runs the suite through the `test-app`
-service of the `mkobi-test` Compose project (`docker/docker-compose.test.yml`,
-PostgreSQL on host port 15434).
-
-A host-side `uv run pytest` is **not** excluded any more. Every pytest process
-resolves its own test database name, `bidb_test_<run token>`, so a host run and a
-container run — or two host runs — can no longer drop each other's database. Two
-limits are left, and both are real:
-
-- The test stack must be up (`.\Makefile.ps1 test-up`), because `tests/conftest.py`
-  points a host run at the `test-db` container's published port, `localhost:${TEST_DB_HOST_PORT:-15434}`.
-- The image installs `libmagic1`; the Windows host does not have it. Any module whose
-  import graph reaches `src/mkobi/services/file_processing.py` therefore fails to
-  collect on the host with `ImportError: failed to find libmagic`. Modules that do
-  not reach it run on the host, database-backed ones included.
-
-`docs/06-backend/testing.md` is the SSOT for the per-run database.
-
-**Canonical path:**
-
-```powershell
-.\Makefile.ps1 test                 # full suite, schema recreated by conftest
-.\Makefile.ps1 test-select -k some_test -v   # forward args to pytest verbatim
-.\Makefile.ps1 test-shell           # interactive bash inside the test image
-```
-
-The `test-select` target forwards every argument after the target name to
-`pytest` unchanged.
-
-`test-shadow` is an **advisory** changed-path plan: merge base → changed paths
-(both rename sides) → reviewed selection → per-selection runner → commands. It
-never changes the default scope or the complete gate. Flags: `--plan`,
-`--base <ref>`, `--candidate <ref>`, `--paths <p1,p2>`. An unresolved scope
-prints `full-required`, exits `2`, runs nothing. Selections reaching
-`services/file_processing.py` route to the container (`test-select`'s one-shot).
-Hosted adoption is not yet evidenced.
-
-The plan is resolved from the repository that holds `Makefile.ps1`, never from
-the shell's current directory, so it behaves the same when launched from
-elsewhere. `--plan` may inspect any ref; it records the candidate **commit** and
-the checkout `HEAD` side by side. Execution is bound to that checkout: without
-`--plan`, a run whose `HEAD` is not the candidate commit, or whose tree has
-staged, unstaged or untracked changes outside the ignore rules, is refused with
-exit `3` and **runs no test command**. A `--paths` plan is labelled
-`selection source: explicit` and stays advisory. The published host `Command`
-applies the same `Env` and `Argv` the runner executes and is replayable verbatim
-in PowerShell (`${env:COVERAGE_FILE}='…'; uv run …`).
-
-**Raw alias (one-off overrides only):**
-
-```powershell
-$dc = 'docker compose -p mkobi-test -f docker/docker-compose.test.yml'
-```
-
-No `--env-file` is needed: the test compose is hermetic (all credentials are
-hard-coded literals). Pass `--project-directory` **never** — it resolves the
-services' `build.context: ..` to the repo's parent directory.
-
-| Task | Command | When |
-|---|---|---|
-| Start test services | `$dc up -d --wait test-db test-redis` | Once per session |
-| Full suite | `$dc run --rm --no-deps test-app pytest` | Default |
-| Stop | `$dc down` | Done (preserves named volumes) |
-
-**How the schema is created.** `tests/conftest.py` recreates and migrates the test
-database itself (session-scoped `setup_test_database` fixture), so there is no
-separate migrate step on the test path. The database it recreates is **this run's own**
-`bidb_test_<run token>` — the token is `MKOBI_TEST_RUN_ID` when set, otherwise
-`uuid4().hex[:8]` — and the session-end teardown drops it again, so the run leaves no
-database behind. Never pass the same `MKOBI_TEST_RUN_ID` to two concurrent runs: they
-would share one database and the first to finish would drop it out from under the
-second. `setup_test_database` is **not** autouse; only the modules and fixtures that
-need a live database request it, so a pure-unit selection creates no database at all.
-The `mkobi_app` role must pre-exist — it is created by
-`docker/init-scripts/01-create-app-role.sh` on first `test-db` volume initialisation.
-If pytest reports `role "mkobi_app" does not exist`, run `.\Makefile.ps1 test-reset`
-once to rebuild the volume.
-
-## Dev stack
-
-```powershell
-.\Makefile.ps1 up         # rm -sf migrate, then up -d --wait
-.\Makefile.ps1 ps
-.\Makefile.ps1 logs app
-.\Makefile.ps1 shell      # throwaway bash in the app image
-.\Makefile.ps1 restart
-```
-
-The dev services are `db`, `migrate`, `app`, `redis`, `rq-worker`, `frontend`;
-`nginx` is production-only (`--profile production`) and is not part of the dev
-stack. Migrations are **Alembic** (`.\Makefile.ps1 migrate`,
-`migration-new`, `migration-status`) — this is not a Django project, so there is
-no ORM migration command and no Django admin bootstrap. The admin user is
-bootstrapped from `ADMIN_USERNAME` / `ADMIN_PASSWORD` at application startup.
-
-## Database and backup
-
-| Task | Command |
-|---|---|
-| Apply migrations | `.\Makefile.ps1 migrate` |
-| Autogenerate a revision | `.\Makefile.ps1 migration-new "message"` |
-| Show current vs head | `.\Makefile.ps1 migration-status` |
-| Interactive psql | `.\Makefile.ps1 psql` |
-| One-shot SQL | `.\Makefile.ps1 psql-c "SELECT 1"` |
-| Backup | `.\Makefile.ps1 backup` |
-| Restore | `.\Makefile.ps1 restore .\backups\bidb-<stamp>.dump` |
-| Prune old backups | `.\Makefile.ps1 prune-backups` |
-
-Never redirect `pg_dump` stdout to a host file — PowerShell corrupts binary
-output. `backup` writes the dump inside the container and copies it out with
-`docker compose cp`.
-
-## Quality gates
-
-| Task | Command |
-|---|---|
-| Lint (ruff) | `.\Makefile.ps1 lint` |
-| Auto-fix (ruff) | `.\Makefile.ps1 format` |
-| Typecheck (mypy) | `.\Makefile.ps1 typecheck` |
-| Frontend lint (eslint) | `.\Makefile.ps1 fe-lint` |
-| Frontend tests (vitest) | `.\Makefile.ps1 fe-test` |
-| All of the above | `.\Makefile.ps1 check` |
-
-`fe-lint` and `fe-test` are host-native and require `.\Makefile.ps1 fe-install`
-to have been run once.
-
-## Diagnostics and cleanup
-
-| Task | Command |
-|---|---|
-| Resolved dev config | `.\Makefile.ps1 config` |
-| Resolved test config | `.\Makefile.ps1 config-test` |
-| Versions + service lists | `.\Makefile.ps1 doctor` |
-| Remove containers/networks, keep volumes | `.\Makefile.ps1 clean` |
-| Remove both projects' volumes (prompts) | `.\Makefile.ps1 fullclean` |
-
-`config` and `config-test` print resolved secrets. Do not paste their output into
-a shared channel. `clean` and `fullclean` are scoped to `-p mkobi` / `-p mkobi-test`
-only and never run a daemon-global prune.
+## Reference
+- Full analysis report (created 2026-11-15): `.ai/reports/vba-compile-and-verification-report-2026-11-15.md`
