@@ -54,16 +54,16 @@ End Type
 ' - if none of specified values present/matchable => fail with clear contextual error (no skip-and-continue)
 ' - if at least one specified value present/matchable => apply matched subset without error
 
-Public Function SplitReportValues(ByVal raw As String, ByVal delim As String) As Variant
+Public Function SplitReportValues(ByVal raw As String, ByVal delim As String, ByVal ctx As String) As Variant
     Dim arr() As String, i As Long, n As Long, outArr() As String
-    If Len(delim) = 0 Then modTreportConfig.Fail 2309, "reports", "general.delimeter is required for multi-value report filters."
+    If Len(delim) = 0 Then modTreportConfig.Fail 2309, ctx, "general.delimeter is required for multi-value report filters."
     arr = Split(raw, delim)
     n = -1
     For i = LBound(arr) To UBound(arr)
         arr(i) = modTreportConfig.Norm(arr(i))
         If Len(arr(i)) > 0 Then n = n + 1
     Next i
-    If n < 0 Then modTreportConfig.Fail 2310, "reports", "No values provided for report filter."
+    If n < 0 Then modTreportConfig.Fail 2310, ctx, "No values provided for report filter."
     ReDim outArr(0 To n)
     n = -1
     For i = LBound(arr) To UBound(arr)
@@ -611,15 +611,16 @@ Public Sub ApplyReportFilters(ByVal pt As PivotTable, ByRef rep As modTreportCon
     Dim colTa As New Collection
     Dim i As Long
 
-    ' Report-level filters use the same uniform selection rule as data-file filters:
-    ' apply matched subset if >=1 value matches; fail clearly if none match or field missing.
-    arr = SplitReportValues(rep.ArticleLevel4NameClean, delim)
+    ' Report-level filters use the same uniform selection rule as data-file filters (Q2-G9):
+    ' field missing/unavailable => fail; none of specified values present/matchable => fail;
+    ' at least one present/matchable => apply matched subset without error (no skip-and-continue).
+    arr = SplitReportValues(rep.ArticleLevel4NameClean, delim, ctx & ",field='articleLevel4Name_clean'")
     For i = LBound(arr) To UBound(arr)
         colCat.Add CStr(arr(i))
     Next i
     modTreportPivot.ApplyFieldSelection pt, "articleLevel4Name_clean", colCat, ctx & ",field='articleLevel4Name_clean'"
 
-    arr = SplitReportValues(rep.TargetAudience, delim)
+    arr = SplitReportValues(rep.TargetAudience, delim, ctx & ",field='targetAudience'")
     For i = LBound(arr) To UBound(arr)
         colTa.Add CStr(arr(i))
     Next i
