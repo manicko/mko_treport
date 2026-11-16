@@ -1,66 +1,76 @@
 Attribute VB_Name = "modTreportFiles"
 Option Explicit
 
-' treport rev.5 - file resolution and workbook open/close helpers (B6, D1, D2, FR-FILE-1/FR-FILE-2)
+' treport - file resolution and workbook open/close helpers (D2 / FR-FILE-1 / FR-FILE-2)
+' D2 RC1: resolve data_files.data_file (base name) in general.input_path directory only
+' (non-recursive). Allowed extensions: .xlsx,.xlsm,.xlsb (fixed set/scan order, not a
+' precedence tie-breaker). Exactly one candidate -> select; zero -> no match fail;
+' >1 candidate for same base name across allowed extensions -> ambiguous fail-fast.
+
+Private Const FILE_EXTS As String = ".xlsx,.xlsm,.xlsb"
 
 Public Function ResolveDataFilePath(ByVal inputFolder As String, ByVal baseName As String) As String
     Dim fso As Object
     Dim exts As Variant
-    Dim allMatches As Collection
+    Dim matches As Collection
     Dim ctx As String
+    Dim searchedPath As String
+    Dim i As Long
+    Dim candList As String
 
     Set fso = CreateObject("Scripting.FileSystemObject")
-    exts = Array(".xlsx", ".xlsm", ".xlsb")
-    ctx = "files/data_file='" & baseName & "',input_path='" & inputFolder & "'"
+    exts = Split(FILE_EXTS, ",")
+    searchedPath = fso.GetAbsolutePathName(inputFolder)
+    ctx = "files/data_file='" & baseName & "',input_path='" & searchedPath & "'"
 
-    Set allMatches = CollectMatchingFiles(fso, inputFolder, baseName, exts)
-    If allMatches.Count = 0 Then
+    If Not fso.FolderExists(searchedPath) Then
         modTreportConfig.Fail 2201, ctx, _
-            "No matching data file found (checked .xlsx,.xlsm,.xlsb in input_path and subfolders)."
+            "Cause: input_path folder not found. Searched path: '" & searchedPath & _
+            "' for data_file base name '" & baseName & "' (allowed extensions " & FILE_EXTS & ")."
     End If
 
-    If allMatches.Count <> 1 Then
-        modTreportConfig.Fail 2202, ctx & ",matches=" & allMatches.Count, _
-            "Multiple matching data files found for base name; expected exactly one match within input_path/subfolders."
+    Set matches = CollectMatchingFiles(fso, searchedPath, baseName, exts)
+
+    If matches.Count = 0 Then
+        modTreportConfig.Fail 2201, ctx, _
+            "Cause: no matching data file found. Searched path: '" & searchedPath & _
+            "' (non-recursive) for data_file base name '" & baseName & _
+            "' with allowed extensions " & FILE_EXTS & "."
     End If
 
-    ResolveDataFilePath = CStr(allMatches(1))
+    If matches.Count > 1 Then
+        candList = ""
+        For i = 1 To matches.Count
+            If Len(candList) > 0 Then candList = candList & ", "
+            candList = candList & "'" & CStr(matches(i)) & "'"
+        Next i
+        modTreportConfig.Fail 2202, ctx & ",matches=" & CStr(matches.Count) & ",candidates=" & candList, _
+            "Cause: ambiguous data file resolution (>1 matching candidate for same base name). " & _
+            "Searched path: '" & searchedPath & "' (non-recursive) for data_file base name '" & baseName & _
+            "' with allowed extensions " & FILE_EXTS & " (scan order only, not a precedence tie-breaker). " & _
+            "Candidates: " & candList & "."
+    End If
+
+    ResolveDataFilePath = CStr(matches(1))
 End Function
 
 Private Function CollectMatchingFiles(ByVal fso As Object, ByVal folderPath As String, ByVal baseName As String, ByRef exts As Variant) As Collection
     Dim col As New Collection
-    Dim fld As Object
-    If Not fso.FolderExists(folderPath) Then
-        Set CollectMatchingFiles = col
-        Exit Function
-    End If
-    Set fld = fso.GetFolder(folderPath)
-    CollectMatchingFilesInFolder fso, fld, baseName, exts, col
+    Dim i As Long
+    Dim ext As String
+    Dim candidate As String
+
+    ' Deterministic scan in fixed allowed-extension order (order is not a precedence tie-breaker).
+    For i = LBound(exts) To UBound(exts)
+        ext = CStr(exts(i))
+        candidate = fso.BuildPath(folderPath, baseName & ext)
+        If fso.FileExists(candidate) Then
+            col.Add candidate
+        End If
+    Next i
+
     Set CollectMatchingFiles = col
 End Function
-
-Private Sub CollectMatchingFilesInFolder(ByVal fso As Object, ByVal fld As Object, ByVal baseName As String, ByRef exts As Variant, ByRef col As Collection)
-    Dim fil As Object, sf As Object
-    Dim nameNoExt As String, ext As String, full As String
-    Dim i As Long
-    For Each fil In fld.Files
-        nameNoExt = fso.GetBaseName(fil.Name)
-        If StrComp(nameNoExt, baseName, vbTextCompare) = 0 Then
-            ext = "." & LCase$(fso.GetExtensionName(fil.Name))
-            For i = LBound(exts) To UBound(exts)
-                If StrComp(ext, CStr(exts(i)), vbTextCompare) = 0 Then
-                    full = fil.path
-                    col.Add full
-                    Exit For
-                End If
-            Next i
-        End If
-    Next fil
-    For Each sf In fld.SubFolders
-        ' recurse into subfolders (e.g. monthly/weekly/base)
-        CollectMatchingFilesInFolder fso, sf, baseName, exts, col
-    Next sf
-End Sub
 
 Public Function OpenWorkbookReadOnly(ByVal path As String) As Workbook
     Dim wb As Workbook
