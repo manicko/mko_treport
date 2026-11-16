@@ -1,53 +1,88 @@
 # Execution plan: 003 — report_wclip week filter / generalized `data_files.filters` model
 
-- **Plan ID:** 003-report-wclip-week-filter  
-- **Status:** Audit + implementation state reviewed (2026-11-16). Code in `mko_treport/src/vbs/export/` reflects a **provisional generic-filter refactor direction** (uniform rules, global numeric domain pre-resolution in current model). **Spec 001 rev.7 placeholder contract is not implemented in code** (still legacy `<max_year>/<max_monthnum>/<max_weeknum>` alias flow). Runtime verification (L1–L3, U1–U10) and several **decision conflicts** remain open.  
-- **Date:** 2026-11-16 (this revision)  
-- **Source specs/plans:** `.ai/problems/002_report_wclip_week_filter_spec.md` (rev.2), `.ai/problems/001_treport_spec.md` (**rev.7**, placeholders: `max_<PivotTable field name>` in `report_sheet`, max of that named field in relevant pivot/context for processed `data_files` row, **independent of `data_files.filters`**). Plan lineage references `.ai/plans/003-report-wclip-week-filter.md` prior sections (B1/B2/B3 drafts) where noted.  
-- **Authoring note:** semantic/task intent only; do not add speculative implementation. Follow repo rules: VBA exports under `mko_treport/src/vbs/export/*`, runtime VBA-only in Excel, build via `mko_treport/src/scripts/build_treport_vba.ps1`, backups/working copies only, **L2 manual VBE `Debug → Compile VBAProject` required** to claim compile, L3 on copies for logic/run changes.
+- **Plan ID:** 003-report-wclip-week-filter
+- **Status:** Audit-reviewed (2026-11-16). VBA exports show provisional generic-filter refactor direction in places, but **Spec 001 rev.7 is not fully implemented** (critical: `report_sheet` placeholders still legacy in code/config flow). Runtime verification (L1–L3, U1–U10) and workbook-level checks remain pending.
+- **Date:** 2026-11-16 (revised from audit findings M1–M4, C1–C3)
+- **Source specs/plans:** `.ai/problems/002_report_wclip_week_filter_spec.md` (rev.2), `.ai/problems/001_treport_spec.md` (**rev.7**, normative). Plan lineage: prior 003 drafts (B1/B2/B3) are superseded where they conflict with rev.7 and this audit-aligned plan.
+- **Scope/constraints:** Semantic/task intent only. No speculative implementation. Runtime VBA-only in Excel; auxiliary tools non-runtime. VBA exports under `mko_treport/src/vbs/export/*`. Build via `mko_treport/src/scripts/build_treport_vba.ps1` on working copies/backups only. **L2 manual VBE `Debug → Compile VBAProject` required** to claim compile; L3 on copies for logic/run changes.
 
-## Current state (from audit, code-truth summary)
+## 1. Current state (code-truth summary, audit-aligned)
 
-**Realized in VBA exports (high level, architecture):**
-- `modTreportFilters`: generic clause parsing/classification/validation (`|`, `field = expr`, list/range/scalar, numeric-convertible/bound rules, duplicate-field rejection), **global per-field numeric domains** pre-resolved before apply (`ResolveFilterContext`/`FieldStates`), clause application in declared order in current flow, **uniform selection** behavior via shared helpers (`ApplyDataFileFilters`, `ApplyReportFilters`). Legacy hardcoded `Year/Month Number/Week Number` + `ResolveMinMaxAndYear`/fixed `MaxYear/MaxMonth/MaxWeek` resolution path removed in favor of this model.
-- `modTreportPivot`: field availability via `PivotFields` (`GetPivotFieldRequired`), placement (`EnsureFilterPlacement`: keep active in place; move hidden/unplaced to Filters/page with best-effort sort), field-scoped selection with **fail if none of specified values matchable** and **apply matched subset if any match**, no `ClearAllFilters`.
-- `modTreportRun`: `Refresh_data` / `Create_report` entrypoints, state capture/restore, orchestration uses generic filters → context → apply once per `data_files` row then report filters; **no warn+skip report path for `articleLevel4Name_clean` none-match** (uniform fail). Report workbook/sheet assembly, sanitization/collision checks, static snapshot copy + formatting as before (group_rows no-op).
-- `modTreportOutput`: legacy placeholders only **`<max_year>`, `<max_monthnum>`, `<max_weeknum>`** substituted from caller-supplied values.
-- `modTreportFilters` + `modTreportRun`: **legacy placeholder compatibility** — representatives recorded during apply and aliases derived for `Year`/`Month Number`/`Week Number` (`DeriveLegacyPlaceholderAliases`), passed into `SubstitutePlaceholders`. This is **not** the rev.7 model (not tied to arbitrary `max_<field name>` resolved independently of `data_files.filters`).
-- `modTreportConfig`: `reports`/`data_files`/`general`/`placeholders` reading unchanged in schema intent for this area except behavior changes above; `placeholders` table content not used by the legacy resolver beyond existing structure.
+**Realized in VBA exports (provisional, subject to runtime evidence):**
+- `modTreportFilters`: generic clause parsing/classification/validation (`|`, `field = expr`, list/range/scalar, numeric-convertible/bound rules, duplicate-field rejection), per-field numeric-domain pre-resolution in current model, clause application in declared order, shared selection helpers for data/report filters.
+- `modTreportPivot`: field lookup by `PivotFields`/available-field presence in current flow, placement intent (keep active in place; move hidden/unplaced to Filters/page with best-effort sort), field-scoped selection applying matched subset when any specified value matches and failing when none matchable in current implementation.
+- `modTreportRun`: `Refresh_data` / `Create_report` orchestration, state capture/restore, apply `data_files.filters` once per `data_files` row then per-report filters; no warn-and-skip report path for `articleLevel4Name_clean` none-match observed in current flow (uniform fail direction). Report workbook/sheet assembly, sanitization/collision checks, static snapshot copy + formatting (group_rows no-op).
+- `modTreportOutput` + `modTreportRun`/`modTreportFilters`: **legacy placeholder model still in effect** — templates/substitution use fixed `<max_year>`, `<max_monthnum>`, `<max_weeknum>` (or equivalent aliases) derived from filter/context representatives in current implementation. This **does not satisfy Spec 001 rev.7**.
 
-**Not evidenced / pending (from audit):** L1/L2/L3 results on working copies; workbook `run` sheet buttons/bindings vs FR-RUN-1; FR-DEP repeatability proof; live Excel confirmation of field identity/caption resolution, U2 axis causality for `report_wclip` extra columns, and regression across all configured rows.
+**Audit gaps / corrections to prior narrative (M4, C3):**
+- **D9 condition (1) missing-field fail-fast must be explicit:** for any applied filter (`data_files.filters`, `reports.articleLevel4Name_clean`, `reports.targetAudience`), if the configured field name is **not found among PivotTable available fields** → **fail fast** with clear context. Prior “Current state” summaries must not omit this condition even if implementation direction appears uniform elsewhere.
+- **D9 conditions (2)/(3):** field exists but **none** of specified configured values matchable → **fail fast** (no warn-and-skip of reports); if **at least one** matchable → apply **matched subset** and proceed (unmatched configured tokens ignored).
+- **D10:** `min`/`max` resolve against available numeric values of **the referenced field only** in the relevant pivot context for the row — **no** cross-field dependency-aware year-first scoping.
+- **Placeholders / “relevant pivot/context” (M3, C3):** rev.7 requires placeholders `max_<PivotTable field name>` in `report_sheet` resolved to the **maximum numeric value** of that named field computed from available numeric-convertible items of that field in the relevant pivot/data context used for the processed `data_files` row **at the time/place resolution is performed by the implementation** (implementation-defined sequencing). Resolution is **independent of `data_files.filters`** clause derivation/representatives (not derived from `data_files.filters`). Unresolvable → fail fast.
+- **D2 divergence (M2):** **Spec 001 D2 is normative** (base name in `input_path`, fixed precedence `.xlsx`, `.xlsm`, `.xlsb`; fail fast if no match or >1 match). Current code behavior is reported to diverge (e.g. recursive search, no precedence selection, fail on >1 match). This is a **known compliance gap** and must be resolved before claiming D2 compliance (do not treat divergence as an accepted spec change).
 
-## What remains to implement / verify (only what is needed)
+**Not evidenced / pending:** L1/L2/L3 results on working copies; `run` sheet controls/bindings (FR-RUN-1); FR-DEP repeatable build/import proof; live Excel confirmation of field/caption resolution, numeric/locale/item behavior, axis/layout effects (U2), and regression across all configured rows/reports.
 
-### 1) Spec 001 rev.7 placeholder contract (critical) — implement
-- **Requirement (rev.7, authoritative):** in `report_sheet`, placeholders are **`max_<PivotTable field name>`** as **`<max_<field name>>`**. Value = **maximum numeric value** of that named PivotTable field in the relevant pivot/context for the processed `data_files` row. **Not derived from `data_files.filters`**. Unresolvable → **fail fast** with clear context. `report_sheet` only; substitution/sanitization/naming/collision rules per D14/FR-NAME (spaces inside preserved by `Trim` rules as specified).
-- **Approach (minimal, semantic):**
-  - In `modTreportOutput`/call path (`modTreportRun`), parse `report_sheet` templates for all `max_<…>` tokens (or equivalent scan) and resolve each by that exact/normalized field name against the relevant PivotTable available fields (use same deterministic field-lookup rules agreed for filters; document resolution rule). Compute the **maximum** from available numeric values of that field in the pivot context used for the row (define whether this is “all available numeric items of that field in current pivot state after any required refresh/application context” consistently with project numeric rules: convertible-to-number, locale-safe per implementation constraints; fail if no numeric values / unresolvable).
-  - Replace legacy fixed trio handling (`<max_year>/<max_monthnum>/<max_weeknum>`) and the alias-derivation chain in `modTreportFilters`/`ResolvedContext` that feeds placeholder substitution for this purpose (remove or refactor so placeholders are **not** sourced from filter representatives). Preserve existing `report_sheet` normalization/sanitization/collision/fail-fast behavior.
-  - **Config/migration impact:** existing `report_m`/`report_w` templates using legacy tokens may require changing to `max_<…>` (e.g. to the actual field names present in those pivots). Assess and apply explicitly (config updates in `treport.xlsm`/workbooks per workflow, not invented here); verify sheet-name outcomes in L3.
-  - **Do not** reintroduce hardcoded field-name semantics in the filter engine for this feature except the documented token form `max_<field name>`.
+## 2. Decisions locked (rev.7, must be reflected in implementation/plan)
 
-### 2) Decisions recorded (user, rev. 7) — align code/spec/plan
-- **Filter matching (D9, user-decided):** **Uniform rule** for all filters (`data_files.filters`, `reports.articleLevel4Name_clean`, `reports.targetAudience`): (1) field name not in PivotTable **available fields** → **fail fast**. (2) field exists but **none** of specified values matchable → **fail fast** (no warn-and-skip of reports). (3) if **≥1** matchable → apply **matched subset**, proceed. This supersedes any earlier “warn and skip report” on no matches for `articleLevel4Name_clean`.
-- **`min`/`max` in `data_files.filters` (D10, user-decided):** resolve against available numeric values of **the referenced field only** (named in that clause), in the relevant pivot context for the row. **No** cross-field dependency-aware year-first scoping in this rule set.
-- **Placeholders (D11, rev. 7):** `max_<PivotTable field name>` in `report_sheet` only; value = maximum numeric value of that named field in the relevant pivot/context for the processed `data_files` row; **not derived from `data_files.filters`**. Placeholders are defined by pivot field names in use (legacy fixed placeholder descriptions in workbook/config commentary are superseded). If unresolvable → **fail fast**.
-- **File resolution (D2):** current code behavior (recursive search, fail on >1 match, no extension precedence pick) is noted as a divergence from strict D2 text in some contexts; confirm desired strict behavior separately if needed.
+- **D9 (uniform, all filters):** (1) missing field in PivotTable available fields → fail fast; (2) no matchable specified values → fail fast (no report-skip); (3) ≥1 matchable → apply matched subset.
+- **D10:** `min`/`max` per referenced field only; no cross-field/year-first dependency scoping.
+- **D11 / placeholders:** `report_sheet` only; tokens `<max_<PivotTable field name>>` (e.g. `<max_Year>`, `<max_Week of Year>`). Value = maximum numeric value of that named field in the relevant pivot/data context for the processed `data_files` row at implementation-defined resolution time/place, from available numeric-convertible items of that field. **Not derived from `data_files.filters`**. Fail fast if unresolvable. Legacy fixed names `max_weeknum/max_monthnum/max_year` are **not** the target model.
+- **D2:** normative as in spec; do not silently weaken precedence/no-match/>1-match rules.
 
-### 3) Runtime / verification (T6 completion + T7)
-- **L1:** run `mko_treport/src/scripts/build_treport_vba.ps1` on a working copy, review report (note VBOM/trust/caveats). No compile claim from L1 alone.
-- **L2 (required):** manual **VBE `Debug → Compile VBAProject`** on working copy; record result.
-- **L3 (on copies only):** `Create_report`/`Refresh_data` as relevant. Verify **`report_wclip`** (Q2-G8): apply intended `filters` context for `Week of Year = (202501–202553)` per decided model; acceptance = intended 2025 week period set in output (no unintended extra columns 54–350 as in reported symptom) — **U2**: confirm whether filtering `Week of Year` constrains the column axis driving expansion or whether axis/layout also requires adjustment; record evidence and make only evidence-backed, minimal scoped changes if needed (no speculative hardcoding).
-- **Regression:** all `data_files`/`reports` rows (incl. `report_m`, `report_w`) with outputs compared appropriately to expectations after any config/token/migration changes.
-- **U1/U7/U8/U10:** verify field name/caption resolution as VBA sees it, numeric/locale/item typing/matching (`Week of Year`/numeric forms), placement/multi-select feasibility for arbitrary fields used.
-- **FR-RUN-1:** in the actual workbook confirm exactly two controls/entry points `Refresh_data` and `Create_report` bound to same-named VBA procedures and removal of legacy `RunXlconcat` (not provable from exports).
-- **FR-DEP (if in scope):** verify single-step auxiliary build/import idempotence, module/document integrity, compile-clean result on working copies as per `docs/02-build-and-deployment/vba-build.md`.
+## 3. Required work (actionable, dependency-aware)
 
-## Out of scope (this plan)
-- Redesign beyond the rev.7 placeholder contract + resolving the listed decision conflicts + required verification; inventing Excel/workbook facts; committing gitignored `data/theiss/*`; runtime dependencies outside VBA/Excel.
+### T-REV7-PLACEHOLDERS — Implement rev.7 `max_<field>` placeholder contract (critical, M1/C2/C3)
+**Goal:** replace legacy fixed placeholder handling with spec-compliant `max_<PivotTable field name>` resolution in `report_sheet`, independent of `data_files.filters`.
+- **Semantic changes:** in `modTreportOutput` / `modTreportRun` (and remove/refactor dependent alias plumbing in `modTreportFilters`/`ResolvedContext` as needed), detect all `max_<…>` tokens in `report_sheet` templates and resolve each by the named PivotTable field (deterministic field lookup consistent with project rules) against the relevant pivot/data context for the processed `data_files` row at a defined resolution point. Compute maximum from available numeric-convertible items of that field in that context; fail fast with clear context if field missing/unusable, no numeric values, or maximum not determinable.
+- **Remove legacy coupling:** do not source placeholder values from filter representatives/`data_files.filters` resolution chains. Remove or neutralize legacy `<max_year>/<max_monthnum>/<max_weeknum>` substitution/alias derivation as the primary mechanism (no silent fallback to legacy semantics except where explicitly required by a separately approved migration step — none assumed).
+- **Template/config migration (mandatory, M1):** audit and update **every** `data_files.report_sheet` template (and any other in-scope placeholder-bearing naming targets per spec — `report_sheet` only) in affected workbooks/configs so legacy tokens are replaced with the correct `max_<PivotTable field name>` tokens matching actual pivot field names/captions in use. Treat this as an explicit checklist item per row/template; do not leave “may require changing” ambiguity. Record before/after template strings in verification evidence.
+- **Preserve:** `Trim`, sanitization, 31-char limit, collision/idempotency fail-fast rules per D14/FR-NAME/FR-RPT; fail-fast on unresolved placeholders (D11/D12).
 
-## References (current)
-- `.ai/problems/001_treport_spec.md` (rev.7)
-- `.ai/problems/002_report_wclip_week_filter_spec.md`
-- `mko_treport/src/vbs/export/*` (authoritative sources)
+### T-D9-ALIGN — Enforce/confirm uniform D9 behavior (including missing-field case)
+- Ensure implementation and error reporting cover **all three** D9 conditions for every applied filter: (1) field not in PivotTable available fields → fail fast; (2) field exists but none of specified values matchable → fail fast; (3) ≥1 matchable → matched subset applied. No warn-and-skip of reports for “no matches”.
+- Keep D10 field-only `min`/`max` resolution (no cross-field/year-first dependency). Do not reintroduce legacy special-casing that contradicts D9/D10.
+
+### T-D2-CONFORMANCE — Data-file resolution per spec D2 (M2, known gap)
+- **Normative:** resolve `data_files.data_file` base name in `general.input_path` to `<data_file>.<ext>` with fixed precedence `.xlsx`, `.xlsm`, `.xlsb`; fail fast if no match or >1 match (deterministic).
+- **Required action:** implement/conform code and tests/checks to D2 behavior and remove/avoid recursive or precedence-ambiguous resolution that violates spec. Until this is done and verified, plan/status must state “D2 not compliant in code; do not claim D2 compliance”.
+
+### T-U2-REPORT_WCLIP — `report_wclip` filter/axis correctness (evidence-driven)
+- Validate that intended `data_files.filters` for `report_wclip` (per decided model/config) constrains output to the intended period set (e.g. 2025 week period) without unintended extra columns (reported symptom 54–350). **U2:** determine with evidence whether filtering the target field constrains the axis driving expansion or whether axis/layout handling is also required; apply only minimal, evidence-backed, non-speculative changes if needed.
+
+### T-VERIFY — Build and runtime verification (mandatory gates)
+- **L1:** run `mko_treport/src/scripts/build_treport_vba.ps1` on a working copy; capture/report path and summary (SUCCESS/ISSUES/ERROR, VBOM/trust notes). No compile claim from L1 alone.
+- **L2 (required for compile claim):** manual VBE **Debug → Compile VBAProject** on the working copy; record file path/date-time and pass/fail. If not done, state limitation explicitly.
+- **L3 (on copies only, required for logic/run changes):** run `Refresh_data` / `Create_report` as applicable on copies; verify outputs and that sources unchanged per project rules.
+- **Workbook-level:** confirm FR-RUN-1 (`run` sheet exactly two controls/entry points `Refresh_data`/`Create_report`, same-named VBA procedures, legacy `RunXlconcat` removed) — cannot be proven from exports alone.
+- **FR-DEP (if exercised):** single-step auxiliary build/import on working copy is repeatable/idempotent, preserves module/document identities, no duplicates/corruption; document compile/validation outcome.
+
+## 4. Regression / acceptance checks (audit-aligned, explicit)
+
+Execute and record results (L3/evidence where applicable):
+
+1. **Placeholder migration (M1/C2):** every `data_files.report_sheet` template in scope uses only rev.7 `max_<PivotTable field name>` tokens (no legacy `max_weeknum/max_monthnum/max_year`) and resolves to the correct max of the named field per D11.
+2. **Placeholder independence (M3/C3, D11):** for each processed `data_files` row, `max_<field>` values are computed from the named field in the relevant pivot/data context at implementation-defined resolution time/place and **not** derived from `data_files.filters` clause derivation/representatives; changing filter representatives/ranges (where configuration allows equivalent field maxima scenarios) must not be the source of placeholder values.
+3. **D9 uniform rule:** (a) configured filter field missing from PivotTable available fields → fail fast with clear context; (b) field exists, no specified values matchable → fail fast; (c) ≥1 matchable → matched subset applied, run proceeds. Applies to all `data_files.filters` fields and `reports.articleLevel4Name_clean`, `reports.targetAudience`. **No warn-and-skip** of reports for no-match cases.
+4. **D10:** `min`/`max` in `data_files.filters` resolve from the referenced field only (no cross-field/year-first dependency).
+5. **D2 compliance (M2):** data-file resolution uses fixed precedence `.xlsx/.xlsm/.xlsb` in `input_path`, deterministic; no match → fail fast; >1 match → fail fast (recursive/ambiguous behavior not accepted).
+6. **No-data / fail-fast outcomes:** filter yielding no data after applicable selections and other D12 conditions produce contextual fail-fast errors as specified.
+7. **Naming/sanitization/collisions (D14/FR-NAME/FR-RPT):** `Trim` rules preserved; Excel-invalid chars sanitized; 31-char limit enforced; collisions fail fast after substitution/sanitization/trimming.
+8. **`report_wclip` correctness:** intended week/period selection produces expected output columns/structure (no unintended 54–350 expansion) with evidence for axis behavior (U2).
+9. **Regression across configs:** all `data_files` rows and all `reports` rows produce correct, deterministic outputs (names/sheets/values/formatting) per spec on actual source data/copies; existing rows (`report_m`, `report_w`) remain valid after template/migration changes.
+10. **Run controls (FR-RUN-1):** `Refresh_data`/`Create_report` present and correctly bound; legacy `RunXlconcat` removed.
+
+## 5. Out of scope
+
+- Changing D2 meaning in spec (normative) or introducing non-spec requirements.
+- Reintroducing warn-and-skip for filter no-match cases or cross-field/year-first `min`/`max` dependency.
+- Redesign beyond rev.7 placeholder contract, D2/D9 alignment, and evidence-backed `report_wclip`/verification needs.
+- Committing gitignored `data/theiss/*` artifacts or adding runtime dependencies outside VBA/Excel.
+
+## 6. References
+
+- `.ai/problems/001_treport_spec.md` (rev.7, normative)
+- `.ai/problems/002_report_wclip_week_filter_spec.md` (rev.2)
+- `mko_treport/src/vbs/export/*`
+- `mko_treport/src/scripts/build_treport_vba.ps1`
 - `docs/02-build-and-deployment/vba-build.md`
