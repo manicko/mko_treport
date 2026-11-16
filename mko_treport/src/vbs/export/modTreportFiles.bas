@@ -81,7 +81,7 @@ Private Sub CollectMatchingFilesInFolder(ByVal fso As Object, ByVal folderPath A
     For i = LBound(exts) To UBound(exts)
         ext = LCase$(CStr(exts(i)))
         For Each fil In fld.Files
-            fullPath = CStr(fil.Path)
+            fullPath = CStr(fil.path)
             If LCase$(fso.GetExtensionName(fullPath)) = Mid$(ext, 2) Then
                 fileBase = fso.GetBaseName(fullPath)
                 If StrComp(fileBase, baseName, vbTextCompare) = 0 Or LCase$(fileBase) = targetBase Then
@@ -95,7 +95,7 @@ Private Sub CollectMatchingFilesInFolder(ByVal fso As Object, ByVal folderPath A
     Dim subPaths As Collection
     Set subPaths = New Collection
     For Each subFld In fld.SubFolders
-        subPaths.Add CStr(subFld.Path)
+        subPaths.Add CStr(subFld.path)
     Next subFld
     Set subPaths = SortStringCollection(subPaths)
     For i = 1 To subPaths.Count
