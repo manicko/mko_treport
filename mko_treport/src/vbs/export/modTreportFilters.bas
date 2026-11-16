@@ -403,7 +403,7 @@ Public Sub ApplyDataFileFilters(ByVal pt As PivotTable, ByRef pf As ParsedFilter
     ' (resolved before any clause application) so each field is independent of other clauses' selections (D10).
     Dim i As Long
     For i = 1 To pf.Count
-        ApplySingleClauseSelection pt, pf.Clauses(i), delim, rc, ctx & ",field='" & pf.Clauses(i).fieldName & "'"
+        ApplySingleClauseSelection pt, pf.Clauses(i), delim, rc, ctx & ",source=data_files.filters"
     Next i
     On Error Resume Next
     pt.Update
@@ -413,9 +413,11 @@ End Sub
 
 Private Sub ApplySingleClauseSelection(ByVal pt As PivotTable, ByRef c As ParsedClause, ByVal delim As String, ByRef rc As ResolvedContext, ByVal ctx As String)
     Dim desired As Collection
-    Set desired = BuildDesiredValues(pt, c, rc, ctx)
+    Dim clauseCtx As String
+    clauseCtx = ctx & ",field='" & c.fieldName & "',expr='" & c.RawExpr & "'"
+    Set desired = BuildDesiredValues(pt, c, rc, clauseCtx)
     ' Uniform rule (D9): apply matched subset if >=1 value matches; fail if none match.
-    modTreportPivot.ApplyFieldSelection pt, c.fieldName, desired, ctx
+    modTreportPivot.ApplyFieldSelection pt, c.fieldName, desired, clauseCtx
 End Sub
 
 Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedClause, ByRef rc As ResolvedContext, ByVal ctx As String) As Collection
@@ -496,19 +498,23 @@ Public Sub ApplyReportFilters(ByVal pt As PivotTable, ByRef rep As modTreportCon
     Dim colCat As New Collection
     Dim colTa As New Collection
     Dim i As Long
+    Dim catCtx As String
+    Dim taCtx As String
 
-    ' Report-level filters use the same uniform selection rule as data-file filters (Q2-G9):
+    ' Report-level filters use the same uniform selection rule as data-file filters (Q2-G9, D9):
     ' field missing/unavailable => fail; none of specified values present/matchable => fail;
     ' at least one present/matchable => apply matched subset without error (no skip-and-continue).
-    arr = SplitReportValues(rep.ArticleLevel4NameClean, delim, ctx & ",field='articleLevel4Name_clean'")
+    catCtx = ctx & ",source=reports.articleLevel4Name_clean,field='articleLevel4Name_clean',values='" & modTreportConfig.Norm(rep.ArticleLevel4NameClean) & "'"
+    arr = SplitReportValues(rep.ArticleLevel4NameClean, delim, catCtx)
     For i = LBound(arr) To UBound(arr)
         colCat.Add CStr(arr(i))
     Next i
-    modTreportPivot.ApplyFieldSelection pt, "articleLevel4Name_clean", colCat, ctx & ",field='articleLevel4Name_clean'"
+    modTreportPivot.ApplyFieldSelection pt, "articleLevel4Name_clean", colCat, catCtx
 
-    arr = SplitReportValues(rep.TargetAudience, delim, ctx & ",field='targetAudience'")
+    taCtx = ctx & ",source=reports.targetAudience,field='targetAudience',values='" & modTreportConfig.Norm(rep.TargetAudience) & "'"
+    arr = SplitReportValues(rep.TargetAudience, delim, taCtx)
     For i = LBound(arr) To UBound(arr)
         colTa.Add CStr(arr(i))
     Next i
-    modTreportPivot.ApplyFieldSelection pt, "targetAudience", colTa, ctx & ",field='targetAudience'"
+    modTreportPivot.ApplyFieldSelection pt, "targetAudience", colTa, taCtx
 End Sub

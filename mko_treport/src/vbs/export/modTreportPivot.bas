@@ -41,7 +41,7 @@ Public Function GetPivotFieldRequired(ByVal pt As PivotTable, ByVal fieldName As
     Dim pf As PivotField
     Set pf = TryGetPivotField(pt, fieldName)
     If pf Is Nothing Then
-        modTreportConfig.Fail 2403, ctx, "Required pivot field '" & fieldName & "' was not found or unavailable in pivot context."
+        modTreportConfig.Fail 2403, ctx & ",field='" & fieldName & "'", "Required pivot field '" & fieldName & "' was not found or unavailable in pivot context (D9: missing field in PivotTable available fields)."
     End If
     Set GetPivotFieldRequired = pf
 End Function
