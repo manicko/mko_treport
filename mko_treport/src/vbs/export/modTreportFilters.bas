@@ -11,7 +11,7 @@ Option Explicit
 
 Public Type ParsedClause
     fieldName As String      ' trimmed as configured
-    FieldKey As String       ' normalized identity for duplicate detection / field-state lookup (Trim + LCase$)
+    fieldKey As String       ' normalized identity for duplicate detection / field-state lookup (Trim + LCase$)
     RawExpr As String        ' trimmed expression
     Kind As String           ' "scalar" | "range" | "list"
     ScalarValue As String
@@ -305,7 +305,7 @@ Public Function ParseAndClassify(ByVal filtersText As String, ByVal delim As Str
         End If
 
         pf.Clauses(i - LBound(parts) + 1).fieldName = fname
-        pf.Clauses(i - LBound(parts) + 1).FieldKey = LCase$(fname)
+        pf.Clauses(i - LBound(parts) + 1).fieldKey = LCase$(fname)
         pf.Clauses(i - LBound(parts) + 1).RawExpr = expr
         ClassifyExpr pf.Clauses(i - LBound(parts) + 1), delim, clauseCtx
     Next i
@@ -313,7 +313,7 @@ Public Function ParseAndClassify(ByVal filtersText As String, ByVal delim As Str
     ' Q2-G7: same field repeated in filters is not allowed (trimmed, case-insensitive duplicate detection).
     For a = 1 To pf.Count
         For b = a + 1 To pf.Count
-            If StrComp(pf.Clauses(a).FieldKey, pf.Clauses(b).FieldKey, vbBinaryCompare) = 0 Then
+            If StrComp(pf.Clauses(a).fieldKey, pf.Clauses(b).fieldKey, vbBinaryCompare) = 0 Then
                 modTreportConfig.Fail 2312, ctx & ",field='" & pf.Clauses(a).fieldName & "'", "Duplicate filter field (case-insensitive): '" & pf.Clauses(a).fieldName & "' and '" & pf.Clauses(b).fieldName & "'."
             End If
         Next b
@@ -369,7 +369,7 @@ Private Function ResolveGlobalBound(ByVal token As String, ByRef c As ParsedClau
         Exit Function
     End If
 
-    st = rc.FieldStates(c.FieldKey)
+    st = rc.FieldStates(c.fieldKey)
     If t = "min" Then
         If Not CBool(st(0)) Then
             modTreportConfig.Fail 2313, ctx & ",field='" & c.fieldName & "',token='" & token & "'", "No numeric values available to resolve global '" & token & "'."
@@ -425,7 +425,7 @@ Public Function ResolveFilterContext(ByVal pt As PivotTable, ByRef pf As ParsedF
 
     ' Pre-resolve global numeric domains for all referenced fields (once per unique field).
     For i = 1 To pf.Count
-        GetOrCreateFieldState rc, pt, pf.Clauses(i).fieldName, pf.Clauses(i).FieldKey, ctx
+        GetOrCreateFieldState rc, pt, pf.Clauses(i).fieldName, pf.Clauses(i).fieldKey, ctx
     Next i
 
     ResolveFilterContext = rc
@@ -543,12 +543,12 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
                 col.Add NormalizeToPivotItem(pfld, s)
                 hasRep = False
             End If
-            SetFieldRepresentative rc, c.FieldKey, hasRep, repNum
+            SetFieldRepresentative rc, c.fieldKey, hasRep, repNum
         Case "range"
             loB = ResolveGlobalBound(c.RangeStart, c, rc, ctx & ",range_start")
             hiB = ResolveGlobalBound(c.RangeEnd, c, rc, ctx & ",range_end")
             If loB > hiB Then modTreportConfig.Fail 2319, ctx & ",field='" & c.fieldName & "'", "Range start is greater than range end after resolving bounds (" & CStr(loB) & " > " & CStr(hiB) & ")."
-            st = rc.FieldStates(c.FieldKey)
+            st = rc.FieldStates(c.fieldKey)
             If Not CBool(st(0)) Then
                 modTreportConfig.Fail 2320, ctx & ",field='" & c.fieldName & "'", "No available numeric values matched range (" & c.RangeStart & "-" & c.RangeEnd & ")."
             End If
@@ -566,7 +566,7 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
                 End If
             Next i
             If Not matched Then modTreportConfig.Fail 2320, ctx & ",field='" & c.fieldName & "'", "No available numeric values matched range (" & c.RangeStart & "-" & c.RangeEnd & ")."
-            SetFieldRepresentative rc, c.FieldKey, hasRep, repNum
+            SetFieldRepresentative rc, c.fieldKey, hasRep, repNum
         Case "list"
             For j = LBound(c.ListValues) To UBound(c.ListValues)
                 col.Add NormalizeToPivotItem(pfld, c.ListValues(j))
@@ -577,7 +577,7 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
                     End If
                 End If
             Next j
-            SetFieldRepresentative rc, c.FieldKey, hasRep, repNum
+            SetFieldRepresentative rc, c.fieldKey, hasRep, repNum
         Case Else
             modTreportConfig.Fail 2321, ctx & ",field='" & c.fieldName & "'", "Unsupported filter expression kind."
     End Select
