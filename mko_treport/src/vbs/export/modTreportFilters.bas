@@ -1,13 +1,22 @@
 Attribute VB_Name = "modTreportFilters"
 Option Explicit
 
+' Generic filter parsing/classification/validation (T1, spec 002 / Q2-G1..G7).
+' Parsing is field-name agnostic: no hardcoded field semantics in generic parsing.
+' Clause model: <field> = <expr> joined by '|'. general.delimeter splits list values inside expressions only.
+
 Public Type ParsedClause
-    fieldName As String
-    RawExpr As String
-    Kind As String
+    fieldName As String      ' trimmed as configured
+    FieldKey As String       ' normalized identity for duplicate detection (Trim + LCase$)
+    RawExpr As String        ' trimmed expression
+    Kind As String           ' "scalar" | "range" | "list"
     ScalarValue As String
-    RangeStart As String
-    RangeEnd As String
+    RangeStart As String     ' bound token (min/max or numeric-convertible literal), trimmed
+    RangeEnd As String       ' bound token (min/max or numeric-convertible literal), trimmed
+    RangeStartIsNumeric As Boolean
+    RangeEndIsNumeric As Boolean
+    RangeStartNum As Double  ' valid when RangeStartIsNumeric = True
+    RangeEndNum As Double    ' valid when RangeEndIsNumeric = True
     ListValues() As String
     HasList As Boolean
 End Type
@@ -17,6 +26,7 @@ Public Type ParsedFilters
     Count As Long
 End Type
 
+' Legacy placeholder/resolution context kept for current call-site compatibility (T2-T5 will evolve).
 Public Type ResolvedContext
     YearFieldName As String
     MaxYear As Variant
@@ -68,13 +78,129 @@ Private Function StripOuterParens(ByVal expr As String) As String
     StripOuterParens = s
 End Function
 
+Private Function IsNumericConvertibleToken(ByVal t As String, ByRef outNum As Double) As Boolean
+    ' Deterministic numeric-convertible test for filter tokens/bounds (F4/Q2-G3).
+    ' Accepts optional sign, digits with at most one decimal separator ('.' or ','),
+    ' requiring at least one digit. Rejects empty, exponent, thousands-grouped, or junk forms.
+    Dim s As String
+    Dim i As Long
+    Dim ch As String
+    Dim sepCount As Long
+    Dim digitCount As Long
+    Dim startPos As Long
+    Dim normNum As String
+
+    IsNumericConvertibleToken = False
+    outNum = 0#
+    s = modTreportConfig.Norm(t)
+    If Len(s) = 0 Then Exit Function
+
+    startPos = 1
+    ch = Left$(s, 1)
+    If ch = "+" Or ch = "-" Then startPos = 2
+    If startPos > Len(s) Then Exit Function
+
+    For i = startPos To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch >= "0" And ch <= "9" Then
+            digitCount = digitCount + 1
+        ElseIf ch = "." Or ch = "," Then
+            sepCount = sepCount + 1
+            If sepCount > 1 Then Exit Function
+        Else
+            Exit Function
+        End If
+    Next i
+    If digitCount = 0 Then Exit Function
+
+    normNum = Replace$(s, ",", ".")
+    On Error GoTo EH
+    outNum = CDbl(normNum)
+    IsNumericConvertibleToken = True
+    Exit Function
+EH:
+    Err.Clear
+    IsNumericConvertibleToken = False
+    outNum = 0#
+End Function
+
+Private Function IsNumericConvertible(ByVal t As String) As Boolean
+    Dim d As Double
+    IsNumericConvertible = IsNumericConvertibleToken(t, d)
+End Function
+
+Private Function IsMinMaxToken(ByVal t As String) As Boolean
+    Dim s As String
+    s = LCase$(modTreportConfig.Norm(t))
+    IsMinMaxToken = (s = "min" Or s = "max")
+End Function
+
+Private Function IsBoundToken(ByVal t As String) As Boolean
+    ' Range bound token: min/max (case-insensitive) or numeric-convertible literal (Q2-G2/Q2-G3).
+    Dim d As Double
+    IsBoundToken = IsMinMaxToken(t) Or IsNumericConvertibleToken(t, d)
+End Function
+
+Private Function CountValidRangeSplits(ByVal inner As String, ByRef outLeft As String, ByRef outRight As String) As Long
+    Dim p As Long
+    Dim leftB As String
+    Dim rightB As String
+    Dim foundCount As Long
+
+    foundCount = 0
+    outLeft = vbNullString
+    outRight = vbNullString
+    If Len(inner) < 3 Then
+        CountValidRangeSplits = 0
+        Exit Function
+    End If
+
+    For p = 2 To Len(inner) - 1
+        If Mid$(inner, p, 1) = "-" Then
+            leftB = modTreportConfig.Norm(Left$(inner, p - 1))
+            rightB = modTreportConfig.Norm(Mid$(inner, p + 1))
+            If IsBoundToken(leftB) And IsBoundToken(rightB) Then
+                foundCount = foundCount + 1
+                If foundCount = 1 Then
+                    outLeft = leftB
+                    outRight = rightB
+                End If
+            End If
+        End If
+    Next p
+    CountValidRangeSplits = foundCount
+End Function
+
 
 Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ctx As String)
-    Dim e As String, inner As String, parts() As String, i As Long
-    Dim leftB As String, rightB As String, p As Long, found As Boolean
+    ' Disambiguation (T1): delimiter present => list; else single valid outer-paren range => range; else scalar.
+    Dim e As String
+    Dim inner As String
+    Dim parts() As String
+    Dim i As Long
+    Dim leftB As String
+    Dim rightB As String
+    Dim splitCount As Long
+    Dim exprCtx As String
+
     e = modTreportConfig.Norm(c.RawExpr)
-    If Len(e) = 0 Then modTreportConfig.Fail 2305, ctx & ",field='" & c.fieldName & "'", "Empty expression."
-    If Len(delim) = 0 Then modTreportConfig.Fail 2306, ctx, "general.delimeter is required for filter parsing."
+    c.RawExpr = e
+    exprCtx = ctx & ",field='" & c.fieldName & "',expr='" & e & "'"
+
+    If Len(e) = 0 Then modTreportConfig.Fail 2305, exprCtx, "Empty expression."
+    If Len(delim) = 0 Then modTreportConfig.Fail 2306, ctx & ",field='" & c.fieldName & "'", "general.delimeter is required for filter parsing."
+
+    c.Kind = vbNullString
+    c.ScalarValue = vbNullString
+    c.RangeStart = vbNullString
+    c.RangeEnd = vbNullString
+    c.RangeStartIsNumeric = False
+    c.RangeEndIsNumeric = False
+    c.RangeStartNum = 0#
+    c.RangeEndNum = 0#
+    c.HasList = False
+
+    ' List: expression contains general.delimeter (list values inside expressions only).
     If InStr(1, e, delim, vbBinaryCompare) > 0 Then
         c.Kind = "list"
         inner = StripOuterParens(e)
@@ -82,76 +208,108 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
         ReDim c.ListValues(LBound(parts) To UBound(parts))
         For i = LBound(parts) To UBound(parts)
             c.ListValues(i) = modTreportConfig.Norm(parts(i))
-            If Len(c.ListValues(i)) = 0 Then modTreportConfig.Fail 2311, ctx & ",field='" & c.fieldName & "'", "Empty value in list expression."
+            If Len(c.ListValues(i)) = 0 Then
+                modTreportConfig.Fail 2311, exprCtx, "Empty value in list expression."
+            End If
         Next i
         c.HasList = True
         Exit Sub
     End If
+
+    ' Range: outer parentheses and exactly one valid split into two bound tokens.
     If Left$(e, 1) = "(" And Right$(e, 1) = ")" And Len(e) >= 5 Then
         inner = Mid$(e, 2, Len(e) - 2)
-        found = False
-        For p = 2 To Len(inner) - 1
-            If Mid$(inner, p, 1) = "-" Then
-                leftB = modTreportConfig.Norm(Left$(inner, p - 1))
-                rightB = modTreportConfig.Norm(Mid$(inner, p + 1))
-                If IsBoundToken(leftB) And IsBoundToken(rightB) Then
-                    c.Kind = "range"
-                    c.RangeStart = leftB
-                    c.RangeEnd = rightB
-                    found = True
-                    Exit For
+        splitCount = CountValidRangeSplits(inner, leftB, rightB)
+        If splitCount = 1 Then
+            c.Kind = "range"
+            c.RangeStart = leftB
+            c.RangeEnd = rightB
+            c.RangeStartIsNumeric = IsNumericConvertibleToken(leftB, c.RangeStartNum)
+            c.RangeEndIsNumeric = IsNumericConvertibleToken(rightB, c.RangeEndNum)
+
+            ' Q2-G3: bounds must be min/max or numeric-convertible literals (range for non-numeric values invalid).
+            If Not (IsMinMaxToken(leftB) Or c.RangeStartIsNumeric) Then
+                modTreportConfig.Fail 2322, exprCtx, "Range start bound '" & leftB & "' is not numeric-convertible and not min/max."
+            End If
+            If Not (IsMinMaxToken(rightB) Or c.RangeEndIsNumeric) Then
+                modTreportConfig.Fail 2323, exprCtx, "Range end bound '" & rightB & "' is not numeric-convertible and not min/max."
+            End If
+
+            ' Parse-time bound validation when both bounds are numeric literals.
+            If c.RangeStartIsNumeric And c.RangeEndIsNumeric Then
+                If c.RangeStartNum > c.RangeEndNum Then
+                    modTreportConfig.Fail 2319, exprCtx, "Range start is greater than range end after numeric validation."
                 End If
             End If
-        Next p
-        If found Then Exit Sub
+            Exit Sub
+        End If
     End If
+
     c.Kind = "scalar"
     c.ScalarValue = e
 End Sub
 
-Private Function IsBoundToken(ByVal t As String) As Boolean
-    Dim s As String
-    s = LCase$(modTreportConfig.Norm(t))
-    IsBoundToken = (s = "min" Or s = "max" Or IsNumeric(s))
-End Function
+' (Parsing helpers above provide deterministic bound/numeric checks for T1.)
 
 Public Function ParseAndClassify(ByVal filtersText As String, ByVal delim As String, ByVal ctx As String) As ParsedFilters
+    ' Generic parse/classify/validate for data-file/report filter expressions (T1).
     Dim pf As ParsedFilters
-    Dim parts() As String, i As Long, n As Long
-    Dim s As String, a As Long, b As Long
+    Dim parts() As String
+    Dim i As Long
+    Dim n As Long
+    Dim s As String
+    Dim a As Long
+    Dim b As Long
+    Dim clause As String
+    Dim eqPos As Long
+    Dim fname As String
+    Dim expr As String
+    Dim clauseCtx As String
+
     s = modTreportConfig.Norm(filtersText)
     If Len(s) = 0 Then modTreportConfig.Fail 2301, ctx, "filters expression is empty."
+    If Len(delim) = 0 Then modTreportConfig.Fail 2306, ctx, "general.delimeter is required for filter parsing."
+
     parts = Split(s, "|")
-    n = 0
-    For i = LBound(parts) To UBound(parts)
-        If Len(modTreportConfig.Norm(parts(i))) > 0 Then n = n + 1
-    Next i
-    If n = 0 Then modTreportConfig.Fail 2302, ctx, "filters expression has no clauses."
+    n = UBound(parts) - LBound(parts) + 1
+    If n <= 0 Then modTreportConfig.Fail 2302, ctx, "filters expression has no clauses."
+
     ReDim pf.Clauses(1 To n)
     pf.Count = n
-    n = 0
+
     For i = LBound(parts) To UBound(parts)
-        Dim clause As String, eqPos As Long, fname As String, expr As String
         clause = modTreportConfig.Norm(parts(i))
-        If Len(clause) = 0 Then GoTo NextClause
+        clauseCtx = ctx & ",clause[" & CStr(i - LBound(parts) + 1) & "]"
+        If Len(clause) = 0 Then
+            modTreportConfig.Fail 2302, clauseCtx & ",filters='" & s & "'", "Empty filter clause."
+        End If
+
         eqPos = InStr(1, clause, "=", vbBinaryCompare)
-        If eqPos <= 1 Then modTreportConfig.Fail 2303, ctx, "Invalid clause (expected '<field> = <expr>'): '" & clause & "'"
+        If eqPos <= 1 Then
+            modTreportConfig.Fail 2303, clauseCtx & ",clause='" & clause & "'", "Invalid clause (expected '<field> = <expr>')."
+        End If
+
         fname = modTreportConfig.Norm(Left$(clause, eqPos - 1))
         expr = modTreportConfig.Norm(Mid$(clause, eqPos + 1))
-        If Len(fname) = 0 Or Len(expr) = 0 Then modTreportConfig.Fail 2304, ctx, "Invalid clause field/expression: '" & clause & "'"
-        n = n + 1
-        pf.Clauses(n).fieldName = fname
-        pf.Clauses(n).RawExpr = expr
-        ClassifyExpr pf.Clauses(n), delim, ctx
-NextClause:
+        If Len(fname) = 0 Or Len(expr) = 0 Then
+            modTreportConfig.Fail 2304, clauseCtx & ",clause='" & clause & "'", "Invalid clause: field and expression must be non-empty."
+        End If
+
+        pf.Clauses(i - LBound(parts) + 1).fieldName = fname
+        pf.Clauses(i - LBound(parts) + 1).FieldKey = LCase$(fname)
+        pf.Clauses(i - LBound(parts) + 1).RawExpr = expr
+        ClassifyExpr pf.Clauses(i - LBound(parts) + 1), delim, clauseCtx
     Next i
+
+    ' Q2-G7: same field repeated in filters is not allowed (trimmed, case-insensitive duplicate detection).
     For a = 1 To pf.Count
         For b = a + 1 To pf.Count
-            If StrComp(pf.Clauses(a).fieldName, pf.Clauses(b).fieldName, vbBinaryCompare) = 0 Then
-                modTreportConfig.Fail 2312, ctx, "Duplicate filter field: '" & pf.Clauses(a).fieldName & "'."
+            If StrComp(pf.Clauses(a).FieldKey, pf.Clauses(b).FieldKey, vbBinaryCompare) = 0 Then
+                modTreportConfig.Fail 2312, ctx & ",field='" & pf.Clauses(a).fieldName & "'", "Duplicate filter field (case-insensitive): '" & pf.Clauses(a).fieldName & "' and '" & pf.Clauses(b).fieldName & "'."
             End If
         Next b
     Next a
+
     ParseAndClassify = pf
 End Function
 
