@@ -43,15 +43,15 @@ Public Function SubstitutePlaceholders(ByVal template As String, ByVal yearVal A
     Dim s As String
     s = template ' keep internal spaces; Trim applied by caller on final name as needed
     If InStr(1, s, "<max_year>", vbBinaryCompare) > 0 Then
-        If IsEmpty(yearVal) Or IsNull(yearVal) Then modTreportConfig.Fail 2605, ctx, "Placeholder <max_year> referenced but value cannot be derived."
+        If IsEmpty(yearVal) Or IsNull(yearVal) Then modTreportConfig.Fail 2605, ctx, "Placeholder <max_year> referenced but value cannot be derived (expected field alias 'Year' representative from resolved filters)."
         s = Replace$(s, "<max_year>", CStr(CLng(CDbl(yearVal))))
     End If
     If InStr(1, s, "<max_monthnum>", vbBinaryCompare) > 0 Then
-        If IsEmpty(monthVal) Or IsNull(monthVal) Then modTreportConfig.Fail 2606, ctx, "Placeholder <max_monthnum> referenced but value cannot be derived."
+        If IsEmpty(monthVal) Or IsNull(monthVal) Then modTreportConfig.Fail 2606, ctx, "Placeholder <max_monthnum> referenced but value cannot be derived (expected field alias 'Month Number' representative from resolved filters)."
         s = Replace$(s, "<max_monthnum>", CStr(CLng(CDbl(monthVal))))
     End If
     If InStr(1, s, "<max_weeknum>", vbBinaryCompare) > 0 Then
-        If IsEmpty(weekVal) Or IsNull(weekVal) Then modTreportConfig.Fail 2607, ctx, "Placeholder <max_weeknum> referenced but value cannot be derived."
+        If IsEmpty(weekVal) Or IsNull(weekVal) Then modTreportConfig.Fail 2607, ctx, "Placeholder <max_weeknum> referenced but value cannot be derived (expected field alias 'Week Number' representative from resolved filters)."
         s = Replace$(s, "<max_weeknum>", CStr(CLng(CDbl(weekVal))))
     End If
     SubstitutePlaceholders = s
