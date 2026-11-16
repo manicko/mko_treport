@@ -175,9 +175,10 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
     Set pt = modTreportPivot.GetPrimaryPivot(ws, fileCtx & ",path='" & srcPath & "'")
 
     pf = modTreportFilters.ParseAndClassify(cfg.DataFiles(dfIdx).Filters, cfg.General.Delimeter, fileCtx)
-    rc = modTreportFilters.ResolveMinMaxAndYear(pt, pf, fileCtx)
+    ' T2: resolve global per-field min/max context before applying clauses (independent of other clauses).
+    rc = modTreportFilters.ResolveFilterContext(pt, pf, fileCtx)
 
-    ' Apply data-file filters once (D8)
+    ' Apply data-file filters once (D8), deterministic AND in declared clause order.
     modTreportFilters.ApplyDataFileFilters pt, pf, cfg.General.Delimeter, rc, fileCtx
 
     For r = LBound(cfg.Reports) To UBound(cfg.Reports)
