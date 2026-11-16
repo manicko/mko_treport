@@ -1,6 +1,11 @@
 Attribute VB_Name = "modTreportPivot"
 Option Explicit
 
+' B3/D11 (rev.7): max_<field> extraction enumerates named field available items via
+' PivotTable.PivotFields(fieldName).PivotItems in the row pivot/data context.
+' Numeric-convertible detection is deterministic (Trim + sign/digit/decimal-sep parse) and
+' independent of data_files.filters application/selection/representatives.
+
 Public Function GetDataSheet(ByVal wb As Workbook, ByVal sheetName As String, ByVal ctx As String) As Worksheet
     Dim ws As Worksheet
     On Error Resume Next
@@ -36,9 +41,98 @@ Public Function GetPivotFieldRequired(ByVal pt As PivotTable, ByVal fieldName As
     Dim pf As PivotField
     Set pf = TryGetPivotField(pt, fieldName)
     If pf Is Nothing Then
-        modTreportConfig.Fail 2403, ctx, "Required pivot field '" & fieldName & "' was not found."
+        modTreportConfig.Fail 2403, ctx, "Required pivot field '" & fieldName & "' was not found or unavailable in pivot context."
     End If
     Set GetPivotFieldRequired = pf
+End Function
+
+Private Function TryParseNumericConvertible(ByVal raw As String, ByRef outNum As Double) As Boolean
+    Dim s As String
+    Dim i As Long
+    Dim ch As String
+    Dim sepCount As Long
+    Dim digitCount As Long
+    Dim startPos As Long
+    Dim normNum As String
+
+    TryParseNumericConvertible = False
+    outNum = 0#
+    s = modTreportConfig.Norm(raw)
+    If Len(s) = 0 Then Exit Function
+
+    startPos = 1
+    ch = Left$(s, 1)
+    If ch = "+" Or ch = "-" Then startPos = 2
+    If startPos > Len(s) Then Exit Function
+
+    For i = startPos To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch >= "0" And ch <= "9" Then
+            digitCount = digitCount + 1
+        ElseIf ch = "." Or ch = "," Then
+            sepCount = sepCount + 1
+            If sepCount > 1 Then Exit Function
+        Else
+            Exit Function
+        End If
+    Next i
+    If digitCount = 0 Then Exit Function
+
+    normNum = Replace$(s, ",", ".")
+    On Error GoTo EH
+    outNum = CDbl(normNum)
+    TryParseNumericConvertible = True
+    Exit Function
+EH:
+    Err.Clear
+    TryParseNumericConvertible = False
+    outNum = 0#
+End Function
+
+Public Function GetPivotFieldNumericMaxValue(ByVal pt As PivotTable, ByVal fieldName As String, ByVal ctx As String) As Variant
+    ' Deterministic maximum numeric value over all available numeric-convertible items of the named
+    ' PivotTable field in the relevant pivot/data context for the processed data_files row.
+    ' Enumeration source: PivotField.PivotItems(item).Name from PivotFields(fieldName) (pre-filter,
+    ' independent of filter clause derivation/representatives and selected-subset results).
+    Dim pf As PivotField
+    Dim i As Long
+    Dim itemName As String
+    Dim numVal As Double
+    Dim hasNum As Boolean
+    Dim maxVal As Double
+
+    Set pf = GetPivotFieldRequired(pt, fieldName, ctx)
+    hasNum = False
+    maxVal = 0#
+
+    On Error Resume Next
+    For i = 1 To pf.PivotItems.Count
+        itemName = CStr(pf.PivotItems(i).Name)
+        If Err.Number <> 0 Then
+            Err.Clear
+            GoTo NextItem
+        End If
+        If TryParseNumericConvertible(itemName, numVal) Then
+            If Not hasNum Or numVal > maxVal Then
+                maxVal = numVal
+                hasNum = True
+            End If
+        End If
+NextItem:
+        Err.Clear
+    Next i
+    On Error GoTo 0
+
+    If Not hasNum Then
+        modTreportConfig.Fail 2619, ctx & ",field='" & fieldName & "'", "Cannot determine max_<" & fieldName & ">: no numeric-convertible values available for referenced PivotTable field in pivot context."
+    End If
+
+    ' Return numeric value without forced zero-padding (D11).
+    If maxVal = Fix(maxVal) Then
+        GetPivotFieldNumericMaxValue = CLng(maxVal)
+    Else
+        GetPivotFieldNumericMaxValue = maxVal
+    End If
 End Function
 
 Private Function GetPivotFieldOrientation(ByVal pf As PivotField) As Long

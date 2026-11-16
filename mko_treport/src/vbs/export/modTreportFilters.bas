@@ -1,13 +1,13 @@
 Attribute VB_Name = "modTreportFilters"
 Option Explicit
 
-' Generic filter parsing/classification/validation (T1), generic per-field min/max resolution/apply (T2/T3),
-' and placeholder representative/alias derivation (T4). Parsing and resolution are field-name agnostic.
-' Clause model: <field> = <expr> joined by '|'. general.delimeter splits list values inside expressions only.
-' T2: min/max resolve from all available numeric values of the referenced field in the pivot (global per field),
-' captured before applying data-file clauses so resolution is independent of other clauses' selections.
-' T4: per-field representatives recorded from present/matched selected values during apply; legacy aliases
-' <max_year>/<max_monthnum>/<max_weeknum> derived by field-name lookup (Year/Month Number/Week Number).
+' Generic filter parsing/classification/validation (T1) and generic per-field min/max resolution/apply (T2/T3/D10).
+' Parsing and resolution are field-name agnostic. Clause model: <field> = <expr> joined by '|'.
+' general.delimeter splits list values inside expressions only.
+' T2/D10: min/max resolve from all available numeric values of the referenced field in the pivot
+' (global per field), captured before applying data-file clauses so resolution is independent of other
+' clauses' selections. Placeholder max_<field> resolution is handled separately in report-sheet flow
+' (rev.7, D11) and is not derived from filter clause derivation/representatives.
 
 Public Type ParsedClause
     fieldName As String      ' trimmed as configured
@@ -30,22 +30,15 @@ Public Type ParsedFilters
     Count As Long
 End Type
 
-' Generic resolved context with legacy placeholder aliases for compatibility (F3/T4).
+' Generic resolved context for D10 filter bound resolution.
 ' FieldStates: Scripting.Dictionary keyed by FieldKey -> Variant array:
 '   [0] HasNumericDomain (Boolean) - True when at least one numeric value is available for the field
 '   [1] GlobalMin (Double)         - valid when HasNumericDomain
 '   [2] GlobalMax (Double)         - valid when HasNumericDomain
 '   [3] NumericDomain (Collection) - available numeric Double values (deduped), valid when HasNumericDomain
-'   [4] HasRepresentative (Boolean) - True when a numeric representative was recorded during apply (T4/F3)
-'   [5] Representative (Double)      - valid when HasRepresentative (present/matched per clause kind)
-' MaxYear/MaxMonth/MaxWeek are legacy aliases derived generically by field-name lookup
-' (Year -> MaxYear, Month Number -> MaxMonth, Week Number -> MaxWeek) from recorded field representatives,
-' without hardcoded filter semantics or special apply steps.
+' Legacy placeholder aliases removed (rev.7): report_sheet max_<field> values are resolved independently.
 Public Type ResolvedContext
     FieldStates As Object
-    MaxYear As Variant
-    MaxMonth As Variant
-    MaxWeek As Variant
 End Type
 
 
@@ -325,9 +318,9 @@ End Function
 ' --- T2/T4: generic per-field min/max resolution (global) and representative state ---
 
 Private Function GetOrCreateFieldState(ByRef rc As ResolvedContext, ByVal pt As PivotTable, ByVal fieldName As String, ByVal fieldKey As String, ByVal ctx As String) As Variant
-    ' Returns Variant array [0]=HasNumericDomain, [1]=GlobalMin, [2]=GlobalMax, [3]=NumericDomain(Collection),
-    ' [4]=HasRepresentative, [5]=Representative. Captures all available numeric values of the referenced field
-    ' from current pivot state (global per field). Must be called before applying data-file clauses.
+    ' Returns Variant array [0]=HasNumericDomain, [1]=GlobalMin, [2]=GlobalMax, [3]=NumericDomain(Collection).
+    ' Captures all available numeric values of the referenced field from current pivot state (global per field).
+    ' Must be called before applying data-file clauses (D10).
     Dim stateArr As Variant
     Dim pfld As PivotField
     Dim vals As Collection
@@ -352,7 +345,7 @@ Private Function GetOrCreateFieldState(ByRef rc As ResolvedContext, ByVal pt As 
         maxV = 0#
     End If
 
-    stateArr = Array(hasNum, minV, maxV, vals, False, 0#)
+    stateArr = Array(hasNum, minV, maxV, vals)
     rc.FieldStates.Add fieldKey, stateArr
     GetOrCreateFieldState = stateArr
 End Function
@@ -387,41 +380,15 @@ Private Function ResolveGlobalBound(ByVal token As String, ByRef c As ParsedClau
     modTreportConfig.Fail 2314, ctx & ",field='" & c.fieldName & "',token='" & token & "'", "Unsupported bound token '" & token & "'."
 End Function
 
-Private Sub DeriveLegacyPlaceholderAliases(ByRef rc As ResolvedContext)
-    ' Compatibility aliases derived generically by field-name lookup from recorded per-field representatives (T4/F3).
-    ' Year -> MaxYear, Month Number -> MaxMonth, Week Number -> MaxWeek. No filter-semantics hardcoding in engine.
-    Dim st As Variant
-
-    rc.MaxYear = Empty
-    rc.MaxMonth = Empty
-    rc.MaxWeek = Empty
-
-    If rc.FieldStates.Exists("year") Then
-        st = rc.FieldStates("year")
-        If CBool(st(4)) Then rc.MaxYear = st(5)
-    End If
-    If rc.FieldStates.Exists("month number") Then
-        st = rc.FieldStates("month number")
-        If CBool(st(4)) Then rc.MaxMonth = st(5)
-    End If
-    If rc.FieldStates.Exists("week number") Then
-        st = rc.FieldStates("week number")
-        If CBool(st(4)) Then rc.MaxWeek = st(5)
-    End If
-End Sub
-
 Public Function ResolveFilterContext(ByVal pt As PivotTable, ByRef pf As ParsedFilters, ByVal ctx As String) As ResolvedContext
-    ' T2/T4: generic per-field resolution. Captures global numeric domain per referenced field from pivot
+    ' D10: generic per-field resolution. Captures global numeric domain per referenced field from pivot
     ' before any clause application, so min/max resolution is independent of other clauses' selections.
-    ' Representatives for placeholder aliases are recorded during apply (present/matched per F3) and derived after apply.
+    ' rev.7: no placeholder aliases/representatives; report_sheet max_<field> resolved separately.
     Dim rc As ResolvedContext
     Dim i As Long
 
     Set rc.FieldStates = CreateObject("Scripting.Dictionary")
     rc.FieldStates.CompareMode = vbBinaryCompare
-    rc.MaxYear = Empty
-    rc.MaxMonth = Empty
-    rc.MaxWeek = Empty
 
     ' Pre-resolve global numeric domains for all referenced fields (once per unique field).
     For i = 1 To pf.Count
@@ -433,8 +400,7 @@ End Function
 
 Public Sub ApplyDataFileFilters(ByVal pt As PivotTable, ByRef pf As ParsedFilters, ByVal delim As String, ByRef rc As ResolvedContext, ByVal ctx As String)
     ' Deterministic AND in declared clause order. Desired values use global per-field min/max from rc
-    ' (resolved before any clause application) so each field is independent of other clauses' selections.
-    ' Records present/matched representatives during apply and derives legacy placeholder aliases after apply (T4/F3).
+    ' (resolved before any clause application) so each field is independent of other clauses' selections (D10).
     Dim i As Long
     For i = 1 To pf.Count
         ApplySingleClauseSelection pt, pf.Clauses(i), delim, rc, ctx & ",field='" & pf.Clauses(i).fieldName & "'"
@@ -443,73 +409,18 @@ Public Sub ApplyDataFileFilters(ByVal pt As PivotTable, ByRef pf As ParsedFilter
     pt.Update
     DoEvents
     On Error GoTo 0
-    DeriveLegacyPlaceholderAliases rc
 End Sub
 
 Private Sub ApplySingleClauseSelection(ByVal pt As PivotTable, ByRef c As ParsedClause, ByVal delim As String, ByRef rc As ResolvedContext, ByVal ctx As String)
     Dim desired As Collection
     Set desired = BuildDesiredValues(pt, c, rc, ctx)
-    ' Uniform rule: apply matched subset if >=1 value matches; fail if none match.
+    ' Uniform rule (D9): apply matched subset if >=1 value matches; fail if none match.
     modTreportPivot.ApplyFieldSelection pt, c.fieldName, desired, ctx
 End Sub
 
-Private Sub SetFieldRepresentative(ByRef rc As ResolvedContext, ByVal fieldKey As String, ByVal hasRep As Boolean, ByVal repVal As Double)
-    Dim st As Variant
-    If Not rc.FieldStates.Exists(fieldKey) Then Exit Sub
-    st = rc.FieldStates(fieldKey)
-    st(4) = hasRep
-    If hasRep Then
-        st(5) = repVal
-    Else
-        st(5) = 0#
-    End If
-    rc.FieldStates(fieldKey) = st
-End Sub
-
-Private Function TryGetListTokenMatchedNumeric(ByVal pf As PivotField, ByVal token As String, ByRef outNum As Double) As Boolean
-    ' Returns True when token is present/matchable in pivot items (same matchability as NormalizeToPivotItem)
-    ' and a numeric-convertible representative value can be taken from token or matched item (F3/T4).
-    Dim t As String
-    Dim i As Long
-    Dim n As String
-    Dim tokNum As Double
-    Dim itemNum As Double
-    Dim hasTokNum As Boolean
-    Dim hasItemNum As Boolean
-    Dim matched As Boolean
-
-    t = modTreportConfig.Norm(token)
-    TryGetListTokenMatchedNumeric = False
-    outNum = 0#
-    matched = False
-    On Error Resume Next
-    For i = 1 To pf.PivotItems.Count
-        n = modTreportConfig.Norm(pf.PivotItems(i).Name)
-        If StrComp(n, t, vbBinaryCompare) = 0 Then
-            matched = True
-        ElseIf IsNumeric(n) And IsNumeric(t) Then
-            If CDbl(n) = CDbl(t) Then matched = True
-        End If
-        If matched Then
-            hasTokNum = IsNumericConvertibleToken(t, tokNum)
-            hasItemNum = IsNumericConvertibleToken(n, itemNum)
-            On Error GoTo 0
-            If hasTokNum Then
-                outNum = tokNum
-                TryGetListTokenMatchedNumeric = True
-            ElseIf hasItemNum Then
-                outNum = itemNum
-                TryGetListTokenMatchedNumeric = True
-            End If
-            Exit Function
-        End If
-    Next i
-    On Error GoTo 0
-End Function
-
 Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedClause, ByRef rc As ResolvedContext, ByVal ctx As String) As Collection
-    ' Build desired pivot-item values for a clause using generic global per-field min/max resolution.
-    ' Records per-field representative from present/matched selected values for placeholder alias derivation (T4/F3).
+    ' Build desired pivot-item values for a clause using generic global per-field min/max resolution (D10).
+    ' No placeholder representative tracking (rev.7: max_<field> resolved independently in report-sheet flow).
     Dim col As New Collection
     Dim pfld As PivotField
     Dim domain As Collection
@@ -519,31 +430,18 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
     Dim i As Long, j As Long
     Dim matched As Boolean
     Dim v As Variant
-    Dim hasRep As Boolean
-    Dim repNum As Double
     Dim resolvedNum As Double
-    Dim tokNum As Double
 
     Set pfld = modTreportPivot.GetPivotFieldRequired(pt, c.fieldName, ctx)
-    hasRep = False
-    repNum = 0#
     Select Case c.Kind
         Case "scalar"
             s = modTreportConfig.Norm(c.ScalarValue)
             If LCase$(s) = "max" Or LCase$(s) = "min" Then
                 resolvedNum = ResolveGlobalBound(s, c, rc, ctx)
                 col.Add NormalizeToPivotItem(pfld, CStr(resolvedNum))
-                hasRep = True
-                repNum = resolvedNum
-            ElseIf IsNumericConvertibleToken(s, resolvedNum) Then
-                col.Add NormalizeToPivotItem(pfld, s)
-                hasRep = True
-                repNum = resolvedNum
             Else
                 col.Add NormalizeToPivotItem(pfld, s)
-                hasRep = False
             End If
-            SetFieldRepresentative rc, c.fieldKey, hasRep, repNum
         Case "range"
             loB = ResolveGlobalBound(c.RangeStart, c, rc, ctx & ",range_start")
             hiB = ResolveGlobalBound(c.RangeEnd, c, rc, ctx & ",range_end")
@@ -559,25 +457,13 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
                 If CDbl(v) >= loB And CDbl(v) <= hiB Then
                     col.Add NormalizeToPivotItem(pfld, CStr(v))
                     matched = True
-                    If Not hasRep Or CDbl(v) > repNum Then
-                        repNum = CDbl(v)
-                        hasRep = True
-                    End If
                 End If
             Next i
             If Not matched Then modTreportConfig.Fail 2320, ctx & ",field='" & c.fieldName & "'", "No available numeric values matched range (" & c.RangeStart & "-" & c.RangeEnd & ")."
-            SetFieldRepresentative rc, c.fieldKey, hasRep, repNum
         Case "list"
             For j = LBound(c.ListValues) To UBound(c.ListValues)
                 col.Add NormalizeToPivotItem(pfld, c.ListValues(j))
-                If TryGetListTokenMatchedNumeric(pfld, modTreportConfig.Norm(c.ListValues(j)), tokNum) Then
-                    If Not hasRep Or tokNum > repNum Then
-                        repNum = tokNum
-                        hasRep = True
-                    End If
-                End If
             Next j
-            SetFieldRepresentative rc, c.fieldKey, hasRep, repNum
         Case Else
             modTreportConfig.Fail 2321, ctx & ",field='" & c.fieldName & "'", "Unsupported filter expression kind."
     End Select

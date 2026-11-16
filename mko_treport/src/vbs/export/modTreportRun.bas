@@ -151,12 +151,18 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
     Dim outWs As Worksheet
     Dim pr As Long, pc As Long
     Dim repCtx As String
+    Dim placeholderMaxValues As Object
 
     Set ws = modTreportPivot.GetDataSheet(wbSrc, cfg.DataFiles(dfIdx).DataSheet, fileCtx & ",path='" & srcPath & "'")
     Set pt = modTreportPivot.GetPrimaryPivot(ws, fileCtx & ",path='" & srcPath & "'")
 
+    ' B3/D11 (rev.7): resolve report_sheet <max_<field>> values once per data_files row from the
+    ' row pivot/data context (available numeric-convertible field items) BEFORE applying any
+    ' data_files.filters or per-report filters, independent of filter clause derivation/representatives.
+    Set placeholderMaxValues = ResolveReportSheetPlaceholderMaxValues(pt, cfg.DataFiles(dfIdx).ReportSheet, fileCtx)
+
     pf = modTreportFilters.ParseAndClassify(cfg.DataFiles(dfIdx).Filters, cfg.General.Delimeter, fileCtx)
-    ' T2: resolve global per-field min/max context before applying clauses (independent of other clauses).
+    ' T2/D10: resolve global per-field min/max context before applying clauses (independent of other clauses).
     rc = modTreportFilters.ResolveFilterContext(pt, pf, fileCtx)
 
     ' Apply data-file filters once (D8), deterministic AND in declared clause order.
@@ -173,7 +179,7 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
             modTreportConfig.Fail 2410, repCtx, "Filter combination yielded no data."
         End If
 
-        sheetName = modTreportOutput.SubstitutePlaceholders(cfg.DataFiles(dfIdx).ReportSheet, rc.MaxYear, rc.MaxMonth, rc.MaxWeek, repCtx)
+        sheetName = modTreportOutput.SubstituteReportSheetPlaceholders(cfg.DataFiles(dfIdx).ReportSheet, placeholderMaxValues, repCtx)
         sheetName = modTreportOutput.SanitizeSheetName(sheetName, repCtx)
         ' D14: fail fast on true collision within the same output workbook namespace;
         ' identical final names across different output workbooks are allowed (D-01).
@@ -195,3 +201,34 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
         Set outWs = Nothing
     Next r
 End Sub
+
+Private Function ResolveReportSheetPlaceholderMaxValues(ByVal pt As PivotTable, ByVal reportSheetTemplate As String, ByVal ctx As String) As Object
+    ' Computes row-scoped <max_<field>> values for a data_files row template.
+    ' Resolution point: after primary PivotTable is available, before data_files.filters apply.
+    ' Source: available numeric-convertible item values of the named PivotTable field in that pivot
+    ' context (field-level domain via PivotFields/PivotItems enumeration), not filter representatives
+    ' and not selected-subset results.
+    Dim resolved As Object
+    Dim fields As Object
+    Dim k As Variant
+    Dim fieldName As String
+    Dim maxVal As Variant
+    Dim maxText As String
+
+    Set resolved = CreateObject("Scripting.Dictionary")
+    resolved.CompareMode = vbBinaryCompare
+    Set fields = modTreportOutput.CollectMaxPlaceholderFields(reportSheetTemplate, ctx & ",report_sheet='" & reportSheetTemplate & "'")
+
+    If Not fields Is Nothing Then
+        For Each k In fields.Keys
+            fieldName = CStr(k)
+            maxVal = modTreportPivot.GetPivotFieldNumericMaxValue(pt, fieldName, ctx & ",report_sheet='" & reportSheetTemplate & "',field='" & fieldName & "'")
+            maxText = CStr(maxVal)
+            If Not resolved.Exists(fieldName) Then
+                resolved.Add fieldName, maxText
+            End If
+        Next k
+    End If
+
+    Set ResolveReportSheetPlaceholderMaxValues = resolved
+End Function

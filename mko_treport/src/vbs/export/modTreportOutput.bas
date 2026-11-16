@@ -1,7 +1,9 @@
 Attribute VB_Name = "modTreportOutput"
 Option Explicit
 
-' treport rev.5 - output/report assembly helpers (B9,B10,B11)
+' treport rev.7 - output/report assembly helpers (B9,B10,B11,D11/D12/D14)
+' report_sheet placeholders: <max_<PivotTable field name>> resolved per data_files row
+' from the row pivot/data context, independent of data_files.filters derivation/representatives.
 
 Public Function SanitizeSheetName(ByVal nameIn As String, ByVal ctx As String) As String
     Dim s As String, i As Long, ch As String, bad As String
@@ -39,22 +41,119 @@ Public Sub EnsureNoSheetNameCollision(ByVal wb As Workbook, ByVal sheetName As S
     End If
 End Sub
 
-Public Function SubstitutePlaceholders(ByVal template As String, ByVal yearVal As Variant, ByVal monthVal As Variant, ByVal weekVal As Variant, ByVal ctx As String) As String
+Public Function CollectMaxPlaceholderFields(ByVal template As String, ByVal ctx As String) As Object
+    ' Returns Scripting.Dictionary of unique PivotTable field names referenced by well-formed
+    ' <max_<field>> tokens in template (key = field name as token inner text; value = True).
+    ' RC3: fails fast on legacy fixed tokens, malformed/unclosed/empty-field <max_... tokens,
+    ' and any other unresolved placeholder-like tokens in template.
+    Dim fields As Object
     Dim s As String
-    s = template ' keep internal spaces; Trim applied by caller on final name as needed
+    Dim pos As Long
+    Dim closePos As Long
+    Dim innerName As String
+    Dim tokenText As String
+    Dim prefixPos As Long
+
+    Set fields = CreateObject("Scripting.Dictionary")
+    fields.CompareMode = vbBinaryCompare
+    s = template
+
+    ' Legacy fixed placeholder tokens are non-compliant (D11/D12, rev.7 migration).
     If InStr(1, s, "<max_year>", vbBinaryCompare) > 0 Then
-        If IsEmpty(yearVal) Or IsNull(yearVal) Then modTreportConfig.Fail 2605, ctx, "Placeholder <max_year> referenced but value cannot be derived (expected field alias 'Year' representative from resolved filters)."
-        s = Replace$(s, "<max_year>", CStr(CLng(CDbl(yearVal))))
+        modTreportConfig.Fail 2613, ctx & ",template='" & s & "',token='<max_year>'", "Legacy fixed placeholder token '<max_year>' is not allowed; use '<max_<PivotTable field name>>'."
     End If
     If InStr(1, s, "<max_monthnum>", vbBinaryCompare) > 0 Then
-        If IsEmpty(monthVal) Or IsNull(monthVal) Then modTreportConfig.Fail 2606, ctx, "Placeholder <max_monthnum> referenced but value cannot be derived (expected field alias 'Month Number' representative from resolved filters)."
-        s = Replace$(s, "<max_monthnum>", CStr(CLng(CDbl(monthVal))))
+        modTreportConfig.Fail 2613, ctx & ",template='" & s & "',token='<max_monthnum>'", "Legacy fixed placeholder token '<max_monthnum>' is not allowed; use '<max_<PivotTable field name>>'."
     End If
     If InStr(1, s, "<max_weeknum>", vbBinaryCompare) > 0 Then
-        If IsEmpty(weekVal) Or IsNull(weekVal) Then modTreportConfig.Fail 2607, ctx, "Placeholder <max_weeknum> referenced but value cannot be derived (expected field alias 'Week Number' representative from resolved filters)."
-        s = Replace$(s, "<max_weeknum>", CStr(CLng(CDbl(weekVal))))
+        modTreportConfig.Fail 2613, ctx & ",template='" & s & "',token='<max_weeknum>'", "Legacy fixed placeholder token '<max_weeknum>' is not allowed; use '<max_<PivotTable field name>>'."
     End If
-    SubstitutePlaceholders = s
+
+    ' P-Scan: find every '<max_' and the next '>' after it.
+    pos = 1
+    Do
+        prefixPos = InStr(pos, s, "<max_", vbBinaryCompare)
+        If prefixPos = 0 Then Exit Do
+        closePos = InStr(prefixPos + 5, s, ">", vbBinaryCompare)
+        If closePos = 0 Then
+            modTreportConfig.Fail 2614, ctx & ",template='" & s & "',token_start=" & CStr(prefixPos), "Malformed/unclosed <max_... placeholder token (missing closing '>')."
+        End If
+        tokenText = Mid$(s, prefixPos, closePos - prefixPos + 1)
+        innerName = Mid$(s, prefixPos + 5, closePos - (prefixPos + 5))
+        If Len(innerName) = 0 Then
+            modTreportConfig.Fail 2615, ctx & ",template='" & s & "',token='" & tokenText & "'", "Malformed <max_... placeholder token: empty field name."
+        End If
+        If Not fields.Exists(innerName) Then
+            fields.Add innerName, True
+        End If
+        pos = closePos + 1
+    Loop
+
+    ' Any other placeholder-like token in template is unresolved/invalid for report_sheet.
+    If InStr(1, s, "<max_", vbBinaryCompare) > 0 And fields.Count = 0 Then
+        modTreportConfig.Fail 2614, ctx & ",template='" & s & "'", "Malformed or unresolved <max_... placeholder token."
+    End If
+    ' Detect placeholder-like tokens not covered by valid <max_<field>> scanning (generic <...> forms).
+    ' Valid <max_<field>> tokens are allowed only when they will be resolved from resolvedMaxValues.
+    ' Remaining checks are finalized after substitution in SubstituteReportSheetPlaceholders.
+
+    Set CollectMaxPlaceholderFields = fields
+End Function
+
+Public Function SubstituteReportSheetPlaceholders(ByVal template As String, ByVal resolvedMaxValues As Object, ByVal ctx As String) As String
+    ' Substitutes all well-formed <max_<field>> tokens using pre-resolved named-field maxima for the
+    ' processed data_files row (independent of data_files.filters). Fails fast if a referenced field
+    ' value is missing/unresolved or if any placeholder-like token remains unresolved/legacy-noncompliant.
+    Dim s As String
+    Dim fields As Object
+    Dim k As Variant
+    Dim token As String
+    Dim valKey As String
+    Dim valText As String
+
+    s = template
+    Set fields = CollectMaxPlaceholderFields(s, ctx)
+
+    If Not fields Is Nothing Then
+        For Each k In fields.Keys
+            token = "<max_" & CStr(k) & ">"
+            valKey = CStr(k)
+            If resolvedMaxValues Is Nothing Then
+                modTreportConfig.Fail 2616, ctx & ",template='" & template & "',field='" & valKey & "',token='" & token & "'", "Placeholder '" & token & "' cannot be resolved: no resolved max values provided."
+            End If
+            If Not resolvedMaxValues.Exists(valKey) Then
+                modTreportConfig.Fail 2616, ctx & ",template='" & template & "',field='" & valKey & "',token='" & token & "'", "Placeholder '" & token & "' cannot be resolved for referenced PivotTable field '" & valKey & "'."
+            End If
+            valText = CStr(resolvedMaxValues(valKey))
+            s = Replace$(s, token, valText)
+        Next k
+    End If
+
+    ' RC3: any unresolved/legacy-noncompliant or placeholder-like tokens remaining must fail fast.
+    If InStr(1, s, "<max_year>", vbBinaryCompare) > 0 Or InStr(1, s, "<max_monthnum>", vbBinaryCompare) > 0 Or InStr(1, s, "<max_weeknum>", vbBinaryCompare) > 0 Then
+        modTreportConfig.Fail 2613, ctx & ",template='" & template & "',result='" & s & "'", "Legacy fixed placeholder token remains unresolved/non-compliant after substitution."
+    End If
+    If InStr(1, s, "<max_", vbBinaryCompare) > 0 Then
+        modTreportConfig.Fail 2617, ctx & ",template='" & template & "',result='" & s & "'", "Unresolved or malformed <max_... placeholder token remains after substitution."
+    End If
+    If HasUnresolvedPlaceholderLikeToken(s) Then
+        modTreportConfig.Fail 2618, ctx & ",template='" & template & "',result='" & s & "'", "Unresolved placeholder-like token remains in report_sheet template."
+    End If
+
+    SubstituteReportSheetPlaceholders = s
+End Function
+
+Private Function HasUnresolvedPlaceholderLikeToken(ByVal s As String) As Boolean
+    ' Conservative RC3 guard: any remaining '<...>' token-like fragment is treated as unresolved.
+    Dim ltPos As Long
+    Dim gtPos As Long
+    ltPos = InStr(1, s, "<", vbBinaryCompare)
+    If ltPos = 0 Then
+        HasUnresolvedPlaceholderLikeToken = False
+        Exit Function
+    End If
+    gtPos = InStr(ltPos + 1, s, ">", vbBinaryCompare)
+    HasUnresolvedPlaceholderLikeToken = (gtPos > ltPos)
 End Function
 
 Public Function GetOrCreateOutputWorkbook(ByRef outWb As Workbook, ByVal outPath As String, ByVal fileNameNoExt As String, ByVal ctx As String) As Workbook
