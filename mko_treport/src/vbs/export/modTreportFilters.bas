@@ -45,12 +45,10 @@ Public Type ResolvedContext
 End Type
 
 
-' Generalized articleLevel4Name_clean multi-value rule:
-' - for report-level articleLevel4Name_clean selections, any configured token not found
-'   among available pivot items is ignored (matched subset is applied)
-' - if none of the configured tokens match, the caller must skip that report with warning
-'   (error 2411) and continue other reports; this is not a whole-run failure.
-' targetAudience and data-file filters remain strict (missing required values fail-fast).
+' Uniform selection rule for all filters (T3 / Q2-G4,Q2-G5,Q2-G9), including report-level:
+' - field missing/unavailable => fail
+' - if none of specified values present/matchable => fail with clear contextual error (no skip-and-continue)
+' - if at least one specified value present/matchable => apply matched subset without error
 
 Public Function SplitReportValues(ByVal raw As String, ByVal delim As String) As Variant
     Dim arr() As String, i As Long, n As Long, outArr() As String
@@ -486,8 +484,8 @@ End Sub
 Private Sub ApplySingleClauseSelection(ByVal pt As PivotTable, ByRef c As ParsedClause, ByVal delim As String, ByRef rc As ResolvedContext, ByVal ctx As String)
     Dim desired As Collection
     Set desired = BuildDesiredValues(pt, c, rc, ctx)
-    ' data_files.filters remain strict: missing/unmatchable required values fail-fast.
-    modTreportPivot.ApplyFieldSelection pt, c.fieldName, desired, False, False, ctx
+    ' Uniform rule: apply matched subset if >=1 value matches; fail if none match.
+    modTreportPivot.ApplyFieldSelection pt, c.fieldName, desired, ctx
 End Sub
 
 Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedClause, ByRef rc As ResolvedContext, ByVal ctx As String) As Collection
@@ -566,18 +564,17 @@ Public Sub ApplyReportFilters(ByVal pt As PivotTable, ByRef rep As modTreportCon
     Dim colTa As New Collection
     Dim i As Long
 
-    ' articleLevel4Name_clean (report-level, multi-value): generalized rule -
-    ' apply matched subset of configured tokens; if none match, signal report-skip (2411).
+    ' Report-level filters use the same uniform selection rule as data-file filters:
+    ' apply matched subset if >=1 value matches; fail clearly if none match or field missing.
     arr = SplitReportValues(rep.ArticleLevel4NameClean, delim)
     For i = LBound(arr) To UBound(arr)
         colCat.Add CStr(arr(i))
     Next i
-    modTreportPivot.ApplyFieldSelection pt, "articleLevel4Name_clean", colCat, True, True, ctx & ",field='articleLevel4Name_clean'"
+    modTreportPivot.ApplyFieldSelection pt, "articleLevel4Name_clean", colCat, ctx & ",field='articleLevel4Name_clean'"
 
-    ' targetAudience behavior unchanged (strict).
     arr = SplitReportValues(rep.TargetAudience, delim)
     For i = LBound(arr) To UBound(arr)
         colTa.Add CStr(arr(i))
     Next i
-    modTreportPivot.ApplyFieldSelection pt, "targetAudience", colTa, False, False, ctx & ",field='targetAudience'"
+    modTreportPivot.ApplyFieldSelection pt, "targetAudience", colTa, ctx & ",field='targetAudience'"
 End Sub

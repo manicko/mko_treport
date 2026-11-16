@@ -76,13 +76,10 @@ Private Sub SortPivotFieldAscending(ByVal pf As PivotField)
     On Error GoTo 0
 End Sub
 
-Private Sub EnsureFilterPlacement(ByVal pf As PivotField, ByRef wasInactiveMovedToPage As Boolean)
-    ' P01/D7/D8: classify by available-field orientation.
-    ' Active (page/row/column): keep in current location, never move.
-    ' Available-but-inactive (hidden/unplaced): move to Filters area (xlPageField) and sort best-effort.
-    ' Unexpected placed states (e.g. data field): do not move; selection path guards behavior.
+Private Sub EnsureFilterPlacement(ByVal pf As PivotField)
+    ' Q2-G6 / P01: keep field placement and apply filter there if active (page/row/column).
+    ' If available but not placed, move to Filters/page and apply. Do not move other active placements.
     Dim orient As Long
-    wasInactiveMovedToPage = False
     orient = GetPivotFieldOrientation(pf)
     If IsActiveFilterOrientation(orient) Then Exit Sub
     If IsInactiveAvailableOrientation(orient) Then
@@ -90,7 +87,6 @@ Private Sub EnsureFilterPlacement(ByVal pf As PivotField, ByRef wasInactiveMoved
         Err.Clear
         pf.Orientation = xlPageField
         If Err.Number = 0 Then
-            wasInactiveMovedToPage = True
             On Error GoTo 0
             SortPivotFieldAscending pf
             Exit Sub
@@ -98,7 +94,7 @@ Private Sub EnsureFilterPlacement(ByVal pf As PivotField, ByRef wasInactiveMoved
         Err.Clear
         On Error GoTo 0
     End If
-    ' Unknown/unexpected orientation: preserve existing layout (no speculative move).
+    ' Unknown/unexpected orientation: preserve existing layout; caller validates filterable placement.
 End Sub
 
 Public Function FieldAvailableValues(ByVal pf As PivotField) As Collection
@@ -162,7 +158,30 @@ Public Function CollectionHas(ByVal col As Collection, ByVal key As String) As B
     On Error GoTo 0
 End Function
 
-Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String, ByVal desired As Collection, ByVal skipMissingTokensIfAnyMatch As Boolean, ByVal skipReportIfNoMatches As Boolean, ByVal ctx As String)
+Private Function JoinDesiredSummary(ByVal desired As Collection) As String
+    Dim i As Long
+    Dim parts() As String
+    Dim tok As String
+    Dim n As Long
+    If desired Is Nothing Then Exit Function
+    If desired.Count = 0 Then Exit Function
+    ReDim parts(1 To desired.Count)
+    For i = 1 To desired.Count
+        tok = modTreportConfig.Norm(CStr(desired(i)))
+        n = n + 1
+        parts(n) = "'" & tok & "'"
+    Next i
+    If n = 0 Then Exit Function
+    If n < desired.Count Then ReDim Preserve parts(1 To n)
+    JoinDesiredSummary = Join(parts, ", ")
+End Function
+
+Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String, ByVal desired As Collection, ByVal ctx As String)
+    ' Uniform selection rule (T3 / Q2-G4,Q2-G5,Q2-G6,Q2-G9):
+    ' - field missing/unavailable in PivotTable fields => fail (2403)
+    ' - none of specified values present/available/matchable => fail with clear contextual error (2407)
+    ' - at least one specified value present/available/matchable => apply matched subset (no error for unmatched)
+    ' Field-scoped operations only; no pt.ClearAllFilters.
     Dim pf As PivotField
     Dim avail As Collection
     Dim wanted As Object
@@ -170,49 +189,44 @@ Public Sub ApplyFieldSelection(ByVal pt As PivotTable, ByVal fieldName As String
     Dim tok As String, itemName As String
     Dim anyWantedVisible As Boolean
     Dim orient As Long
-    Dim movedToPage As Boolean
+    Dim matchedKey As String
+    Dim reqSummary As String
 
-    ' P01: resolve from available fields only; unavailable => 2403 (D12).
     Set pf = GetPivotFieldRequired(pt, fieldName, ctx)
-    EnsureFilterPlacement pf, movedToPage
+    EnsureFilterPlacement pf
     orient = GetPivotFieldOrientation(pf)
+    If Not IsActiveFilterOrientation(orient) Then
+        modTreportConfig.Fail 2408, ctx & ",field='" & fieldName & "'", "Cannot place or apply filter on field '" & fieldName & "' in a filterable area (Filters/Rows/Columns); placement/apply is impossible."
+    End If
 
     Set avail = FieldAvailableValues(pf)
     Set wanted = CreateObject("Scripting.Dictionary")
     wanted.CompareMode = vbBinaryCompare
 
     For i = 1 To desired.Count
-        tok = modTreportConfig.Norm(desired(i))
+        tok = modTreportConfig.Norm(CStr(desired(i)))
         If Len(tok) = 0 Then GoTo NextTok
         If CollectionHas(avail, tok) Then
             If Not wanted.Exists(tok) Then wanted.Add tok, True
         Else
-            Dim matchedKey As String
             matchedKey = FindMatchingAvailable(avail, tok)
             If Len(matchedKey) > 0 Then
                 If Not wanted.Exists(matchedKey) Then wanted.Add matchedKey, True
-            ElseIf skipMissingTokensIfAnyMatch Then
-                ' Generalized articleLevel4Name_clean rule: ignore configured tokens absent from pivot items.
-            Else
-                modTreportConfig.Fail 2406, ctx & ",field='" & fieldName & "'", "Required filter value '" & tok & "' was not found among available pivot items."
             End If
+            ' Uniform rule: unmatched specified tokens do not cause error when >=1 matches exist.
         End If
 NextTok:
     Next i
 
     If wanted.Count = 0 Then
-        If skipReportIfNoMatches Then
-            ' No configured values matched available pivot items for this report context:
-            ' orchestrator must warn and skip this report, continue with others (not a whole-run failure).
-            modTreportConfig.Fail 2411, ctx & ",field='" & fieldName & "'", "No matching configured values found for report filter '" & fieldName & "'; skip this report."
-        End If
-        modTreportConfig.Fail 2407, ctx & ",field='" & fieldName & "'", "No valid values remain selected for filter."
+        reqSummary = JoinDesiredSummary(desired)
+        modTreportConfig.Fail 2407, ctx & ",field='" & fieldName & "'", "None of the specified filter values are present or matchable for field '" & fieldName & "'. Requested: [" & reqSummary & "]."
     End If
 
     On Error GoTo EH
     pt.ManualUpdate = True
 
-    ' P01/D8: field-scoped clear only (never pt.ClearAllFilters). Preserve layout for active row/column/page fields.
+    ' Field-scoped clear only (never pt.ClearAllFilters). Preserve layout for active row/column/page fields.
     On Error Resume Next
     pf.ClearAllFilters
     Err.Clear
@@ -236,13 +250,11 @@ NextTok:
         End If
     Next i
     If Not anyWantedVisible Then
-        If skipReportIfNoMatches Then
-            modTreportConfig.Fail 2411, ctx & ",field='" & fieldName & "'", "No matching configured values found for report filter '" & fieldName & "' after matching; skip this report."
-        End If
-        modTreportConfig.Fail 2407, ctx & ",field='" & fieldName & "'", "No valid values remain selected for filter (after matching)."
+        reqSummary = JoinDesiredSummary(desired)
+        modTreportConfig.Fail 2407, ctx & ",field='" & fieldName & "'", "No valid values remain selected for field '" & fieldName & "' after matching. Requested: [" & reqSummary & "]."
     End If
 
-    ' Second pass: apply wanted set in place without changing field orientation.
+    ' Second pass: apply matched subset in place without changing field orientation.
     For i = 1 To pf.PivotItems.Count
         itemName = modTreportConfig.Norm(pf.PivotItems(i).Name)
         If IsWantedItem(wanted, itemName) Then

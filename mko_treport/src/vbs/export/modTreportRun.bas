@@ -4,26 +4,7 @@ Option Explicit
 ' treport rev.6 run entry points (FR-RUN-1)
 ' Final runtime: Excel VBA only. Auxiliary dev tools must not be runtime dependencies.
 
-Private Const ERR_REPORT_SKIP_NO_MATCH As Long = 2411 + vbObjectError
 Private Const ERR_FILTER_NO_DATA As Long = 2410 + vbObjectError
-
-Private Function StripTreportPrefix(ByVal msg As String) As String
-    Const pfx As String = "treport: "
-    If Left$(msg, Len(pfx)) = pfx Then
-        StripTreportPrefix = Mid$(msg, Len(pfx) + 1)
-    Else
-        StripTreportPrefix = msg
-    End If
-End Function
-
-Private Sub WarnSkippedReport(ByVal reason As String, ByVal ctx As String)
-    Dim msg As String
-    msg = "WARNING: report skipped." & vbCrLf & _
-          "Reason: " & reason & vbCrLf & _
-          "Context: " & ctx
-    Debug.Print "treport | " & Replace$(msg, vbCrLf, " | ")
-    MsgBox msg, vbExclamation, "treport warning"
-End Sub
 
 Public Sub Refresh_data()
     Dim st As modTreportState.AppState
@@ -182,15 +163,12 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
     modTreportFilters.ApplyDataFileFilters pt, pf, cfg.General.Delimeter, rc, fileCtx
 
     For r = LBound(cfg.Reports) To UBound(cfg.Reports)
-        On Error GoTo ReportEH
         repCtx = fileCtx & ",report='" & cfg.Reports(r).Name & "',report_row=" & cfg.Reports(r).RowIndex
 
-        ' per-report filters: reset/reapply articleLevel4Name_clean and targetAudience.
-        ' Generalized rule: if no articleLevel4Name_clean values match available pivot items
-        ' for this report context, ApplyReportFilters raises 2411 -> warn and skip this report.
+        ' Per-report filters use the uniform selection rule (no warn-and-skip on none-match).
         modTreportFilters.ApplyReportFilters pt, cfg.Reports(r), cfg.General.Delimeter, repCtx
 
-        ' verify no-data? try to detect empty presented data body
+        ' Fail fast when the filter combination yields no presented data.
         If modTreportPivot.IsPivotDataEmpty(pt) Then
             modTreportConfig.Fail 2410, repCtx, "Filter combination yielded no data."
         End If
@@ -214,19 +192,6 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
         modTreportExtract.CopyPivotSnapshot pt, outWs, pr, pc, repCtx
         modTreportExtract.ApplySheetFormatting outWs, cfg.DataFiles(dfIdx).freezeRow, cfg.DataFiles(dfIdx).freezeCol, cfg.DataFiles(dfIdx).Zoom, repCtx
         ' D13: group_rows ignored (deferred/no-op)
-        GoTo NextReport
-
-ReportEH:
-        If Err.Number = ERR_REPORT_SKIP_NO_MATCH Then
-            WarnSkippedReport StripTreportPrefix(Err.Description), repCtx
-            Err.Clear
-            On Error GoTo 0
-            GoTo NextReport
-        End If
-        Err.Raise Err.Number, Err.Source, Err.Description
-
-NextReport:
-        On Error GoTo 0
         Set outWs = Nothing
     Next r
 End Sub
