@@ -28,6 +28,9 @@ Public Type TreportDataFile
     freezeCol As Variant
     Zoom As Variant
     GroupRows As Variant ' deferred/no-op (D13)
+    template As String
+    OnlyValues As Boolean
+    InsertRows As Boolean
     RowIndex As Long
 End Type
 
@@ -204,6 +207,26 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
         If Len(cfg.DataFiles(i).DataSheet) = 0 Then Fail 2115, "config/data_files[row=" & i & ",data_file=" & cfg.DataFiles(i).DataFile & "]", "column 'data_sheet' is required."
         If Len(cfg.DataFiles(i).ReportSheet) = 0 Then Fail 2116, "config/data_files[row=" & i & ",data_file=" & cfg.DataFiles(i).DataFile & "]", "column 'report_sheet' is required."
         If Len(cfg.DataFiles(i).Filters) = 0 Then Fail 2117, "config/data_files[row=" & i & ",data_file=" & cfg.DataFiles(i).DataFile & "]", "column 'filters' is required."
+
+        cfg.DataFiles(i).template = ""
+        cfg.DataFiles(i).OnlyValues = False
+        cfg.DataFiles(i).InsertRows = False
+
+        If HasColumn(loD, "template") Then
+            cfg.DataFiles(i).template = ReadP04TemplateValue( _
+                loD.DataBodyRange.Cells(i, ColIndex(loD, "template")).value, _
+                i, cfg.DataFiles(i).DataFile, cfg.DataFiles(i).DataSheet)
+        End If
+        If HasColumn(loD, "only_values") Then
+            cfg.DataFiles(i).OnlyValues = ReadP04BooleanValue( _
+                loD.DataBodyRange.Cells(i, ColIndex(loD, "only_values")).value, _
+                "only_values", i, cfg.DataFiles(i).DataFile, cfg.DataFiles(i).DataSheet)
+        End If
+        If HasColumn(loD, "insert_rows") Then
+            cfg.DataFiles(i).InsertRows = ReadP04BooleanValue( _
+                loD.DataBodyRange.Cells(i, ColIndex(loD, "insert_rows")).value, _
+                "insert_rows", i, cfg.DataFiles(i).DataFile, cfg.DataFiles(i).DataSheet)
+        End If
     Next i
 
     n = RowCountSafe(loP)
@@ -239,6 +262,79 @@ EH:
     Fail 2121, "config/output_path='" & outputPath & "'", "Unable to create or access output folder."
 End Function
 
+Private Function DataFilesParamContext(ByVal rowIdx As Long, ByVal dataFileName As String, ByVal dataSheetName As String) As String
+    DataFilesParamContext = "config/data_files[row=" & rowIdx & ",data_file=" & dataFileName & ",data_sheet=" & dataSheetName & "]"
+End Function
+
+Private Function ReadP04TemplateValue(ByVal raw As Variant, ByVal rowIdx As Long, ByVal dataFileName As String, ByVal dataSheetName As String) As String
+    Dim ctx As String
+    Dim s As String
+    ctx = DataFilesParamContext(rowIdx, dataFileName, dataSheetName)
+    If IsError(raw) Then
+        Fail 2118, ctx, "parameter 'template' has invalid error value '" & CStr(raw) & "'; expected blank or a non-empty template worksheet name."
+    End If
+    If IsEmpty(raw) Or IsNull(raw) Then
+        ReadP04TemplateValue = vbNullString
+        Exit Function
+    End If
+    s = Norm(raw)
+    ReadP04TemplateValue = s
+End Function
+
+Private Function ReadP04BooleanValue(ByVal raw As Variant, ByVal paramName As String, ByVal rowIdx As Long, ByVal dataFileName As String, ByVal dataSheetName As String) As Boolean
+    Dim ctx As String
+    Dim s As String
+    Dim d As Double
+    ctx = DataFilesParamContext(rowIdx, dataFileName, dataSheetName)
+
+    If IsError(raw) Then
+        Fail 2118, ctx, "parameter '" & paramName & "' has invalid error value '" & CStr(raw) & "'; expected blank, False/0/No, or True/1/Yes."
+    End If
+    If IsEmpty(raw) Or IsNull(raw) Then
+        ReadP04BooleanValue = False
+        Exit Function
+    End If
+    If VarType(raw) = vbBoolean Then
+        ReadP04BooleanValue = CBool(raw)
+        Exit Function
+    End If
+
+    s = Norm(raw)
+    If Len(s) = 0 Then
+        ReadP04BooleanValue = False
+        Exit Function
+    End If
+
+    Select Case LCase$(s)
+        Case "false", "0", "no"
+            ReadP04BooleanValue = False
+            Exit Function
+        Case "true", "1", "yes"
+            ReadP04BooleanValue = True
+            Exit Function
+    End Select
+
+    If isNumeric(raw) Then
+        On Error GoTo EHNum
+        d = CDbl(raw)
+        On Error GoTo 0
+        If d = 0# Then
+            ReadP04BooleanValue = False
+            Exit Function
+        ElseIf d = 1# Then
+            ReadP04BooleanValue = True
+            Exit Function
+        End If
+    End If
+
+    Fail 2118, ctx, "parameter '" & paramName & "' has invalid value '" & CStr(raw) & "'; expected blank, False/0/No, or True/1/Yes."
+    Exit Function
+
+EHNum:
+    On Error GoTo 0
+    Fail 2118, ctx, "parameter '" & paramName & "' has invalid value '" & CStr(raw) & "'; expected blank, False/0/No, or True/1/Yes."
+End Function
+
 Public Function NormalizeInputFolder(ByVal inputPath As String) As String
     Dim p As String
     Dim fso As Object
@@ -251,6 +347,8 @@ Public Function NormalizeInputFolder(ByVal inputPath As String) As String
     If Right$(p, 1) <> "\" Then p = p & "\"
     NormalizeInputFolder = p
 End Function
+
+
 
 
 
