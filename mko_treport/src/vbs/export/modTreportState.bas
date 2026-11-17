@@ -42,3 +42,5 @@ Public Sub RestoreState(ByRef s As AppState)
     Application.CutCopyMode = False
     On Error GoTo 0
 End Sub
+
+

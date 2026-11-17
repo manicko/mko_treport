@@ -692,3 +692,5 @@ Public Sub ApplyReportFilters(ByVal pt As PivotTable, ByRef rep As modTreportCon
     Next i
     modTreportPivot.ApplyFieldSelection pt, "targetAudience", colTa, taCtx
 End Sub
+
+

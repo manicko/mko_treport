@@ -251,3 +251,5 @@ Public Function NormalizeInputFolder(ByVal inputPath As String) As String
     If Right$(p, 1) <> "\" Then p = p & "\"
     NormalizeInputFolder = p
 End Function
+
+

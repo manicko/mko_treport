@@ -201,44 +201,46 @@ function Apply-TreportVbaToOpenWorkbook {
     $removedDupes = @()
     $issuesLocal = @()
 
-    # Remove legacy obsolete module if present
-    $legacyNames = @('xlconcat_macro')
-    foreach ($legacy in $legacyNames) {
-        $foundLegacy = @()
-        $comps = $VbProj.VBComponents
-        for ($i = $comps.Count; $i -ge 1; $i--) {
-            $c = $comps.Item($i)
-            if ($c.Name -ieq $legacy) { $foundLegacy += $c }
-        }
-        foreach ($c in $foundLegacy) {
-            $t = [int]$c.Type
-            if ($t -eq 1 -or $t -eq 2) {
-                $VbProj.VBComponents.Remove($c)
-                $removedLegacy += $legacy
-            } else {
-                $issuesLocal += ("Legacy component '{0}' found but not a removable standard/class module (type {1}); left unchanged" -f $legacy, $t)
-            }
+    # Remove ALL non-document modules (Std/Class/UserForm) for a clean rebuild.
+    # Document modules (Sheet/Workbook, type 100) cannot be removed and are synced by CodeModule update.
+    # This prevents stale/corrupted leftovers (e.g. Module1 with BOM artifacts) and duplicates.
+    $compsToRemove = @()
+    for ($i = 1; $i -le $VbProj.VBComponents.Count; $i++) {
+        $c = $VbProj.VBComponents.Item($i)
+        if ([int]$c.Type -ne 100) { $compsToRemove += $c }
+    }
+    foreach ($c in $compsToRemove) {
+        $nm = [string]$c.Name
+        $ct = [int]$c.Type
+        try {
+            $VbProj.VBComponents.Remove($c)
+            if ($nm -ieq 'xlconcat_macro') { $removedLegacy += $nm }
+            else { $removedDupes += ("{0} (removed-prebuild)" -f $nm) }
+        } catch {
+            $issuesLocal += ("Could not remove module '{0}' (type {1}) before rebuild: {2}" -f $nm, $ct, $_.Exception.Message)
         }
     }
 
+    # Re-add managed standard modules from export (.bas) as fresh components and inject
+    # stripped CodeModule bodies (avoids .Import carrying binary/BOM artifacts).
     foreach ($f in $StdFilesList) {
         $modName = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
-        $comps = $VbProj.VBComponents
-        for ($i = $comps.Count; $i -ge 1; $i--) {
-            $c = $comps.Item($i)
-            if ($c.Name -ieq $modName) {
-                $ct = [int]$c.Type
-                if ($ct -eq 1 -or $ct -eq 2 -or $ct -eq 3) {
-                    $VbProj.VBComponents.Remove($c)
-                } else {
-                    $issuesLocal += ("Name collision: '{0}' exists as document/type {1}; cannot replace as standard module" -f $modName, $ct)
-                }
-            }
+        try {
+            $newComp = $VbProj.VBComponents.Add(1) # vbext_ct_StdModule
+            $newComp.Name = $modName
+            $rawStd = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
+            $bodyStd = Strip-VbaHeader $rawStd
+            $cmStd = $newComp.CodeModule
+            $lcStd = [int]$cmStd.CountOfLines
+            if ($lcStd -gt 0) { $cmStd.DeleteLines(1, $lcStd) }
+            if (-not [string]::IsNullOrEmpty($bodyStd)) { $cmStd.AddFromString($bodyStd) }
+            $imported += $modName
+        } catch {
+            $issuesLocal += ("Failed to add standard module '{0}': {1}" -f $modName, $_.Exception.Message)
         }
-        $null = $VbProj.VBComponents.Import($f.FullName)
-        $imported += $modName
     }
 
+    # Synchronize document modules safely (Sheet1/Sheet2/ThisWorkbook) by updating CodeModule only.
     foreach ($f in $DocFilesList) {
         $docName = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
         $comp = $null
@@ -249,20 +251,24 @@ function Apply-TreportVbaToOpenWorkbook {
             $comp = $null
         }
         if ($null -ne $comp) {
-            $raw = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
-            $body = Strip-VbaHeader $raw
-            $cm = $comp.CodeModule
-            $lineCount = [int]$cm.CountOfLines
-            if ($lineCount -gt 0) { $cm.DeleteLines(1, $lineCount) }
-            if (-not [string]::IsNullOrEmpty($body)) { $cm.AddFromString($body) }
-            $syncedDocs += $docName
+            try {
+                $raw = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
+                $body = Strip-VbaHeader $raw
+                $cm = $comp.CodeModule
+                $lineCount = [int]$cm.CountOfLines
+                if ($lineCount -gt 0) { $cm.DeleteLines(1, $lineCount) }
+                if (-not [string]::IsNullOrEmpty($body)) { $cm.AddFromString($body) }
+                $syncedDocs += $docName
+            } catch {
+                $issuesLocal += ("Failed to sync document module '{0}': {1}" -f $docName, $_.Exception.Message)
+            }
         }
     }
 
+    # Post-check: duplicates (defensive; should not occur after full non-document rebuild).
     $nameCounts = @{}
-    $compsAfterOps = $VbProj.VBComponents
-    for ($i = 1; $i -le $compsAfterOps.Count; $i++) {
-        $nm = $compsAfterOps.Item($i).Name
+    for ($i = 1; $i -le $VbProj.VBComponents.Count; $i++) {
+        $nm = $VbProj.VBComponents.Item($i).Name
         if (-not $nameCounts.ContainsKey($nm)) { $nameCounts[$nm] = 0 }
         $nameCounts[$nm]++
     }

@@ -295,3 +295,5 @@ Private Function ResolveReportSheetPlaceholderMaxValues(ByVal pt As PivotTable, 
 
     Set ResolveReportSheetPlaceholderMaxValues = resolved
 End Function
+
+
