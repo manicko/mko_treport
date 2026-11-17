@@ -187,8 +187,9 @@ Public Sub ApplyOutlineGrouping(ByVal insertedRng As Range, ByVal groupRowsRaw A
                 isGroupableFill = True
             Else
                 Select Case CLng(cellInterior.ColorIndex)
-                    Case 2, -4142, -4105
-                        ' xlColorIndexWhite (2), xlColorIndexNone (-4142), xlAutomatic (-4105)
+                    Case 2, -4142, -4105, 65
+                        ' xlColorIndexWhite (2), xlColorIndexNone (-4142), xlAutomatic (-4105),
+                        ' system/default white background (65)
                         isGroupableFill = True
                 End Select
             End If
@@ -206,7 +207,6 @@ Public Sub ApplyOutlineGrouping(ByVal insertedRng As Range, ByVal groupRowsRaw A
                     Set groupRange = ws.Range(ws.Cells(insertedRng.Row + startRow - 1, absCol), _
                                               ws.Cells(insertedRng.Row + r - 2, absCol))
                     groupRange.Rows.Group
-                    If rowsCollapsed Then groupRange.Rows.OutlineLevel = 1
                 End If
                 inRun = False
             End If
@@ -218,7 +218,6 @@ Public Sub ApplyOutlineGrouping(ByVal insertedRng As Range, ByVal groupRowsRaw A
             Set groupRange = ws.Range(ws.Cells(insertedRng.Row + startRow - 1, absCol), _
                                       ws.Cells(insertedRng.Row + insRows - 1, absCol))
             groupRange.Rows.Group
-            If rowsCollapsed Then groupRange.Rows.OutlineLevel = 1
         End If
     End If
 
