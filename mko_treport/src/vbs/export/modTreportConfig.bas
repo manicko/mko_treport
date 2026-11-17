@@ -7,6 +7,7 @@ Public Type TreportGeneral
     inputPath As String
     outputPath As String
     Delimeter As String
+    RowsCollapsed As Boolean
 End Type
 
 Public Type TreportReport
@@ -125,6 +126,7 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
     Dim loG As ListObject, loR As ListObject, loD As ListObject, loP As ListObject
     Dim i As Long, n As Long
     Dim pName As String, pVal As String
+    Dim pValRaw As Variant
 
     Set ws = GetSettingsWs(wb)
     Set loG = GetLO(ws, "general")
@@ -134,13 +136,32 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
 
     n = RowCountSafe(loG)
     If n = 0 Then Fail 2103, "config/general", "ListObject 'general' has no data rows."
+    cfg.General.RowsCollapsed = False
     For i = 1 To n
         pName = Norm(loG.DataBodyRange.Cells(i, ColIndex(loG, "parameter")).value)
-        pVal = Norm(loG.DataBodyRange.Cells(i, ColIndex(loG, "value")).value)
+        pValRaw = loG.DataBodyRange.Cells(i, ColIndex(loG, "value")).value
+        pVal = Norm(pValRaw)
         Select Case LCase$(pName)
             Case "input_path": cfg.General.inputPath = pVal
             Case "output_path": cfg.General.outputPath = pVal
             Case "delimeter": cfg.General.Delimeter = pVal
+            Case "rows_collapsed"
+                If IsEmpty(pValRaw) Or IsNull(pValRaw) Then
+                    cfg.General.RowsCollapsed = False
+                ElseIf VarType(pValRaw) = vbBoolean Then
+                    cfg.General.RowsCollapsed = CBool(pValRaw)
+                ElseIf Len(pVal) = 0 Then
+                    cfg.General.RowsCollapsed = False
+                Else
+                    Select Case LCase$(pVal)
+                        Case "false", "0", "no"
+                            cfg.General.RowsCollapsed = False
+                        Case "true", "1", "yes"
+                            cfg.General.RowsCollapsed = True
+                        Case Else
+                            Fail 2107, "config/general", "parameter 'rows_collapsed' has invalid value '" & CStr(pValRaw) & "' (row=" & i & ", section='general'); expected blank, False/0/No, or True/1/Yes."
+                    End Select
+                End If
         End Select
     Next i
     If Len(cfg.General.inputPath) = 0 Then Fail 2104, "config/general", "parameter 'input_path' is required and must be non-empty."

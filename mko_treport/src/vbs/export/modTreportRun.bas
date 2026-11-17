@@ -160,6 +160,7 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
     Dim pr As Long, pc As Long
     Dim repCtx As String
     Dim placeholderMaxValues As Object
+    Dim insertedRng As Range
 
     Set ws = modTreportPivot.GetDataSheet(wbSrc, cfg.DataFiles(dfIdx).DataSheet, fileCtx & ",path='" & srcPath & "'")
     Set pt = modTreportPivot.GetPrimaryPivot(ws, fileCtx & ",path='" & srcPath & "'")
@@ -203,9 +204,10 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
         If pc <= 0 Then pc = 1
 
         Set outWs = modTreportOutput.AddReportSheet(outBooks(r), sheetName, repCtx)
-        modTreportExtract.CopyPivotSnapshot pt, outWs, pr, pc, repCtx
+        Set insertedRng = modTreportExtract.CopyPivotSnapshot(pt, outWs, pr, pc, repCtx)
         modTreportExtract.ApplySheetFormatting outWs, cfg.DataFiles(dfIdx).freezeRow, cfg.DataFiles(dfIdx).freezeCol, cfg.DataFiles(dfIdx).Zoom, repCtx
-        ' D13: group_rows ignored (deferred/no-op)
+        modTreportExtract.ApplyOutlineGrouping insertedRng, cfg.DataFiles(dfIdx).GroupRows, cfg.General.RowsCollapsed, repCtx & ",output='" & outNames(r) & "'"
+        Set insertedRng = Nothing
         Set outWs = Nothing
     Next r
 End Sub
