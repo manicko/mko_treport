@@ -97,7 +97,7 @@ Public Sub ApplyOutlineGrouping(ByVal insertedRng As Range, ByVal groupRowsRaw A
     Dim startRow As Long
     Dim inRun As Boolean
     Dim groupRange As Range
-    Dim isNoFill As Boolean
+    Dim isGroupableFill As Boolean
     Dim cellInterior As Interior
     Dim dblVal As Double
     Dim rawText As String
@@ -175,10 +175,19 @@ Public Sub ApplyOutlineGrouping(ByVal insertedRng As Range, ByVal groupRowsRaw A
     startRow = 0
     For r = 1 To insRows
         Set cellInterior = insertedRng.Cells(r, groupColRel).Interior
-        isNoFill = (cellInterior.Pattern = xlNone) Or _
-                   (cellInterior.Pattern = xlSolid And CLng(cellInterior.Color) = RGB(255, 255, 255))
+        ' Groupable (P01 D5 + compatibility): no fill, explicit solid white, or system/automatic background
+        ' treated as white/no-fill for outline grouping (e.g. indexed/system background colors).
+        isGroupableFill = (cellInterior.Pattern = xlNone)
+        If Not isGroupableFill And cellInterior.Pattern = xlSolid Then
+            If CLng(cellInterior.Color) = RGB(255, 255, 255) Then
+                isGroupableFill = True
+            ElseIf CLng(cellInterior.ColorIndex) = 2 Or CLng(cellInterior.ColorIndex) = -4142 Or CLng(cellInterior.ColorIndex) = -4105 Then
+                ' xlColorIndexWhite (2), xlColorIndexNone (-4142), xlAutomatic (-4105)
+                isGroupableFill = True
+            End If
+        End If
 
-        If isNoFill Then
+        If isGroupableFill Then
             If Not inRun Then
                 startRow = r
                 inRun = True
@@ -225,6 +234,8 @@ GroupingComFail:
     modTreportConfig.Fail 2703, ctx & ",group_rows=" & CStr(groupColRel) & ",abs_col=" & CStr(absCol) & ",rows_collapsed=" & CStr(rowsCollapsed), _
         "Outline grouping failed after validation: " & Err.Description
 End Sub
+
+
 
 
 
