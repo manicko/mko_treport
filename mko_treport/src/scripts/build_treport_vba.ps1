@@ -1,95 +1,93 @@
-<#
+<# 
 .SYNOPSIS
-One-step VBA build/import utility for treport.xlsm (FR-DEP).
+One-step VBA build/import utility for treport.xlsm.
 
 .DESCRIPTION
 Assembles the current VBA project from modular sources in mko_treport/src/vbs/export/
-into treport.xlsm workbooks. Auxiliary dev/deployment tooling only (not a runtime
-dependency). Idempotent: repeated runs do not create duplicates.
+into the tracked treport workbook. Auxiliary dev/deployment tooling only (not a runtime
+dependency).
 
-Default behavior:
-- Updates BOTH canonical workbooks in place (after backup), using mko_treport/src/vbs/export
-  as the source of VBA modules:
-  1) data\theiss\treport.xlsm
-  2) mko_treport\src\xls\treport.xlsm
-- Syncs exports/bin back from the second (last) updated workbook when SyncExports is enabled
-  (default), so mko_treport/src/vbs/vbaProject.bin and managed .bas/.cls in ExportDir match it.
-- A single Excel COM session is used to apply the same exported modules to both workbooks.
+Default behavior (safe, no sync):
+- Builds VBA modules from mko_treport/src/vbs/export into mko_treport/src/xls/treport.xlsm
+  IN PLACE (after creating a timestamped backup in BackupDir).
+- Does NOT update mko_treport/src/vbs/export/*.bas|*.cls and does NOT update
+  mko_treport/src/vbs/vbaProject.bin unless -SyncExports is specified explicitly.
+- Does NOT touch data\theiss\treport.xlsm unless -DeployToDataTheiss is specified explicitly.
 
-Behavior (FR-DEP):
-- Single command/script invocation.
-- Reads all current VBA source modules from the export directory (9 standard .bas,
-  3 document .cls). Preserves individual module identities; never merges modules and
-  never treats document modules as ordinary standard modules.
-- Creates timestamped backups for each workbook updated.
-- Imports/updates all required standard modules (remove-by-name then Import).
+Build/apply behavior:
+- Reads managed VBA source modules from ExportDir (.bas and .cls). Preserves individual
+  module identities; never merges modules and never treats document modules as ordinary
+  standard modules.
+- Creates a timestamped backup of the target workbook before modification.
+- Rebuilds managed standard/class/userform components as non-document modules by removing
+  them and re-adding standard modules from .bas exports (CodeModule body injection from
+  stripped UTF-8 source; avoids VBComponents.Import for std modules).
 - Synchronizes document-module code safely (Sheet1/Sheet2/ThisWorkbook) by updating
   CodeModule only (no worksheet/workbook component replacement).
 - Prevents duplicate modules and removes obsolete legacy component 'xlconcat_macro'.
-- Attempts VBA compile/validation (best-effort) on the last workbook processed; reports
-  prerequisite if programmatic access to the VBA project object model is not trusted.
-- Exports updated vbaProject.bin and individual source exports from the final workbook
-  when SyncExports is enabled.
-- Produces a clear build/verification report (stdout and file in .ai/tmp/).
+- Attempts VBA compile/validation (best-effort) on the built workbook; reports prerequisite
+  if programmatic access to the VBA project object model is not trusted.
 
-.PARAMETER SourceWorkbook
-Optional override for the primary workbook path (first in the default pair). When
--NoDefaultBoth is set and no targets are customized, this is the single workbook updated.
-Default when using -NoDefaultBoth without other overrides: data\theiss\treport.xlsm.
+Sync behavior (-SyncExports, explicit opt-in only):
+- After a successful build/save, refreshes managed .bas/.cls files in ExportDir via
+  VBComponent.Export() from the built workbook and extracts xl/vbaProject.bin to
+  mko_treport/src/vbs/vbaProject.bin.
+- Export is performed from the single built target workbook (unambiguous source).
+- Note: VBE Export may normalize formatting/line endings/case and does not apply
+  post-export encoding normalization here; vbaProject.bin is a volatile binary artifact.
+  Use sync intentionally (typically after successful manual VBE compile/L2).
+
+Deploy behavior (-DeployToDataTheiss, explicit opt-in only):
+- After a successful build/save (and optional sync), replaces data\theiss\treport.xlsm
+  with a copy of the built mko_treport\src\xls\treport.xlsm (removes existing data copy
+  if present, creates directory if needed). The data copy is not used as a sync source.
+
+.PARAMETER TargetWorkbook
+Workbook to build in place. Default: mko_treport\src\xls\treport.xlsm (tracked working workbook).
+A timestamped backup is always created before modification.
 
 .PARAMETER ExportDir
 Directory containing VBA source exports (.bas/.cls). Default: mko_treport\src\vbs\export.
 
-.PARAMETER WorkCopyPath
-When set (and not using default dual in-place), creates/uses a working copy path for the
-single-target flow. Ignored in default dual in-place mode.
-
 .PARAMETER BackupDir
 Directory for backups and report. Default: .ai\tmp.
 
-.PARAMETER InPlace
-In single-target mode, update the target in place (backup created). In default mode
-dual targets are always updated in place.
-
-.PARAMETER TargetWorkbook
-Single-target mode: workbook to update when -InPlace is used or when -NoDefaultBoth.
-Default: same as SourceWorkbook.
-
-.PARAMETER NoDefaultBoth
-Update only one workbook (legacy/single behavior) instead of the default pair
-(data\theiss\treport.xlsm and mko_treport\src\xls\treport.xlsm).
-
-.PARAMETER AdditionalWorkbook
-Extra workbook path(s) to update after the primary targets (in place, backed up). Can be
-combined with defaults; duplicates are ignored.
-
 .PARAMETER SyncExports
-When set (default), export vbaProject.bin to mko_treport\src\vbs\vbaProject.bin and
-refresh individual .bas/.cls files in ExportDir from the resulting workbook.
+Explicit opt-in: export vbaProject.bin to mko_treport\src\vbs\vbaProject.bin and refresh
+managed .bas/.cls files in ExportDir from the built workbook after a successful save.
+Default: disabled.
 
-.PARAMETER NoSyncExports
-Disable export/bin sync back to source tree.
+.PARAMETER DeployToDataTheiss
+Explicit opt-in: after successful build/save, delete data\theiss\treport.xlsm if present and
+copy the built mko_treport\src\xls\treport.xlsm to data\theiss\treport.xlsm.
+Default: disabled.
 
 .PARAMETER ReportPath
 Explicit report file path. Default: <BackupDir>\build_treport_vba_<ts>.txt.
 
 .EXAMPLE
 .\mko_treport\src\scripts\build_treport_vba.ps1
+# Default: build VBA into tracked mko_treport\src\xls\treport.xlsm (backup in .ai\tmp), no sync, no deploy.
 
 .EXAMPLE
-.\mko_treport\src\scripts\build_treport_vba.ps1 -NoDefaultBoth -SourceWorkbook mko_treport\src\xls\treport.xlsm -InPlace
+.\mko_treport\src\scripts\build_treport_vba.ps1 -SyncExports
+# Build and then explicitly refresh exports/bin from the built workbook.
+
+.EXAMPLE
+.\mko_treport\src\scripts\build_treport_vba.ps1 -DeployToDataTheiss
+# Build tracked workbook and then replace data\theiss\treport.xlsm with a copy of it.
+
+.EXAMPLE
+.\mko_treport\src\scripts\build_treport_vba.ps1 -TargetWorkbook .ai\tmp\treport_check.xlsm
+# Build into an explicit workbook copy/path (backup/report still in BackupDir by default).
 #>
 [CmdletBinding()]
 param(
-    [string]$SourceWorkbook,
-    [string]$ExportDir,
-    [string]$WorkCopyPath,
-    [string]$BackupDir,
     [string]$TargetWorkbook,
-    [switch]$InPlace,
-    [switch]$NoDefaultBoth,
-    [string[]]$AdditionalWorkbook,
-    [switch]$NoSyncExports,
+    [string]$ExportDir,
+    [string]$BackupDir,
+    [switch]$SyncExports,
+    [switch]$DeployToDataTheiss,
     [string]$ReportPath
 )
 
@@ -344,14 +342,14 @@ $exitCode = 0
 try {
     $repoRoot = Resolve-RepoRoot
 
-    if ([string]::IsNullOrWhiteSpace($ExportDir))      { $ExportDir      = Join-Path $repoRoot 'mko_treport\src\vbs\export' }
-    if ([string]::IsNullOrWhiteSpace($BackupDir))      { $BackupDir      = Join-Path $repoRoot '.ai\tmp' }
+    if ([string]::IsNullOrWhiteSpace($ExportDir)) { $ExportDir = Join-Path $repoRoot 'mko_treport\src\vbs\export' }
+    if ([string]::IsNullOrWhiteSpace($BackupDir)) { $BackupDir = Join-Path $repoRoot '.ai\tmp' }
+    if ([string]::IsNullOrWhiteSpace($TargetWorkbook)) { $TargetWorkbook = Join-Path $repoRoot 'mko_treport\src\xls\treport.xlsm' }
 
-    $SyncExports = -not $NoSyncExports.IsPresent
     $ts = Get-Timestamp
     $stamp = Get-Stamp
 
-    if (-not (Test-Path -LiteralPath $ExportDir))      { throw "Export directory not found: $ExportDir" }
+    if (-not (Test-Path -LiteralPath $ExportDir)) { throw "Export directory not found: $ExportDir" }
     New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
 
     $stdFiles = @(Get-ChildItem -LiteralPath $ExportDir -Filter '*.bas' -File | Sort-Object Name)
@@ -365,46 +363,11 @@ try {
     $exportResolved = (Resolve-Path -LiteralPath $ExportDir).Path
     $backupResolved = (Resolve-Path -LiteralPath $BackupDir).Path
 
-    $workbookTargets = New-Object System.Collections.ArrayList
+    $targetResolved = [System.IO.Path]::GetFullPath($TargetWorkbook)
+    $defaultTrackedTarget = [System.IO.Path]::GetFullPath((Join-Path $repoRoot 'mko_treport\src\xls\treport.xlsm'))
+    $isDefaultTrackedTarget = ($targetResolved -ieq $defaultTrackedTarget)
 
-    if ($NoDefaultBoth) {
-        if ([string]::IsNullOrWhiteSpace($SourceWorkbook)) { $SourceWorkbook = Join-Path $repoRoot 'data\theiss\treport.xlsm' }
-        if ([string]::IsNullOrWhiteSpace($TargetWorkbook)) { $TargetWorkbook = $SourceWorkbook }
-        $t = [System.IO.Path]::GetFullPath($TargetWorkbook)
-        if (-not (Test-Path -LiteralPath $t)) { throw "Target workbook not found: $t" }
-        [void]$workbookTargets.Add($t)
-    } else {
-        $defaultTargets = @(
-            (Join-Path $repoRoot 'data\theiss\treport.xlsm'),
-            (Join-Path $repoRoot 'mko_treport\src\xls\treport.xlsm')
-        )
-        if (-not [string]::IsNullOrWhiteSpace($SourceWorkbook)) {
-            $so = [System.IO.Path]::GetFullPath($SourceWorkbook)
-            if (-not ($defaultTargets | Where-Object { $_ -ieq $so })) { $defaultTargets = @($so) + $defaultTargets }
-        }
-        if (-not [string]::IsNullOrWhiteSpace($TargetWorkbook)) {
-            $to = [System.IO.Path]::GetFullPath($TargetWorkbook)
-            if (-not ($defaultTargets | Where-Object { $_ -ieq $to })) { $defaultTargets = @($to) + $defaultTargets }
-        }
-        foreach ($dt in $defaultTargets) {
-            $rp = [System.IO.Path]::GetFullPath($dt)
-            if (-not (Test-Path -LiteralPath $rp)) { throw "Target workbook not found: $rp" }
-            $already = $false
-            foreach ($ex in $workbookTargets) { if ($ex -ieq $rp) { $already = $true; break } }
-            if (-not $already) { [void]$workbookTargets.Add($rp) }
-        }
-    }
-
-    if ($AdditionalWorkbook) {
-        foreach ($aw in $AdditionalWorkbook) {
-            if ([string]::IsNullOrWhiteSpace($aw)) { continue }
-            $rp = [System.IO.Path]::GetFullPath($aw)
-            if (-not (Test-Path -LiteralPath $rp)) { throw "Additional workbook not found: $rp" }
-            $already = $false
-            foreach ($ex in $workbookTargets) { if ($ex -ieq $rp) { $already = $true; break } }
-            if (-not $already) { [void]$workbookTargets.Add($rp) }
-        }
-    }
+    if (-not (Test-Path -LiteralPath $targetResolved)) { throw "Target workbook not found: $targetResolved" }
 
     if ([string]::IsNullOrWhiteSpace($ReportPath)) {
         $ReportPath = Join-Path $backupResolved ("build_treport_vba_{0}.txt" -f $stamp)
@@ -412,28 +375,30 @@ try {
         $ReportPath = [System.IO.Path]::GetFullPath($ReportPath)
     }
 
-    Write-Step ([ref]$report) "=== build_treport_vba (FR-DEP) ==="
+    $vbaBinPath = Join-Path $repoRoot 'mko_treport\src\vbs\vbaProject.bin'
+    $dataDeployTarget = Join-Path $repoRoot 'data\theiss\treport.xlsm'
+
+    Write-Step ([ref]$report) "=== build_treport_vba ==="
     Write-Step ([ref]$report) ("Timestamp: {0}" -f $ts)
     Write-Step ([ref]$report) ("Repo root: {0}" -f $repoRoot)
     Write-Step ([ref]$report) ("Export dir: {0}" -f $exportResolved)
     Write-Step ([ref]$report) ("Backup dir: {0}" -f $backupResolved)
-    Write-Step ([ref]$report) ("Mode: {0}" -f ($(if ($NoDefaultBoth) { 'single (NoDefaultBoth)' } else { 'default dual in-place: data\\theiss\\treport.xlsm + mko_treport\\src\\xls\\treport.xlsm (+ any overrides/additions)' })))
-    Write-Step ([ref]$report) ("SyncExports: {0}" -f $SyncExports)
+    Write-Step ([ref]$report) ("Target workbook (in-place): {0}" -f $targetResolved)
+    Write-Step ([ref]$report) ("Default tracked target: {0} ({1})" -f $defaultTrackedTarget, ($(if ($isDefaultTrackedTarget) { 'yes' } else { 'no' })))
+    Write-Step ([ref]$report) ("SyncExports (explicit): {0}" -f $SyncExports.IsPresent)
+    Write-Step ([ref]$report) ("DeployToDataTheiss (explicit): {0}" -f $DeployToDataTheiss.IsPresent)
     Write-Step ([ref]$report) ("Standard modules found ({0}): {1}" -f $stdFiles.Count, (($stdFiles | ForEach-Object { $_.Name }) -join ', '))
     Write-Step ([ref]$report) ("Document modules found ({0}): {1}" -f $docFiles.Count, (($docFiles | ForEach-Object { $_.Name }) -join ', '))
     if ($missingDoc.Count -gt 0) {
         Write-Step ([ref]$report) ("WARNING: missing expected document module sources: {0}" -f ($missingDoc -join ', '))
     }
-    Write-Step ([ref]$report) ("Workbooks to update ({0}):" -f $workbookTargets.Count)
-    foreach ($wt in $workbookTargets) { Write-Step ([ref]$report) ("  - {0}" -f $wt) }
-    if (-not [string]::IsNullOrWhiteSpace($WorkCopyPath) -and $NoDefaultBoth) {
-        Write-Step ([ref]$report) "NOTE: -WorkCopyPath is ignored in default dual mode; use -NoDefaultBoth for single work-copy workflows."
-    }
 
-    $targetResults = @()
-    $lastWorkbookPath = $null
+    $backupPath = Join-Path $backupResolved ("treport_backup_{0}_{1}.xlsm" -f $stamp, [System.IO.Path]::GetFileNameWithoutExtension($targetResolved))
+    Copy-Item -LiteralPath $targetResolved -Destination $backupPath -Force
+    Write-Step ([ref]$report) ("Backup created: {0}" -f $backupPath)
+
+    $targetResult = $null
     $vbaBinExported = $false
-    $vbaBinPath = Join-Path $repoRoot 'mko_treport\src\vbs\vbaProject.bin'
 
     try {
         $excel = New-Object -ComObject Excel.Application
@@ -445,55 +410,44 @@ try {
     try { $excel.EnableEvents = $false } catch { }
     try { $excel.AskToUpdateLinks = $false } catch { }
 
-    $idx = 0
-    foreach ($wt in $workbookTargets) {
-        $idx++
-        $wbPathResolved = [System.IO.Path]::GetFullPath($wt)
-        $lastWorkbookPath = $wbPathResolved
-        $backupPath = Join-Path $backupResolved ("treport_backup_{0}_{1:D2}_{2}.xlsm" -f $stamp, $idx, [System.IO.Path]::GetFileNameWithoutExtension($wbPathResolved))
-        Copy-Item -LiteralPath $wbPathResolved -Destination $backupPath -Force
-        Write-Step ([ref]$report) ("")
-        Write-Step ([ref]$report) ("--- Target {0}/{1}: {2} ---" -f $idx, $workbookTargets.Count, $wbPathResolved)
-        Write-Step ([ref]$report) ("Backup created: {0}" -f $backupPath)
+    Write-Step ([ref]$report) ""
+    Write-Step ([ref]$report) ("--- Build target: {0} ---" -f $targetResolved)
 
-        $workbook = $null
-        $vbProj = $null
-        try {
-            $workbook = $excel.Workbooks.Open($wbPathResolved)
-        } catch {
-            throw ("Failed to open workbook '{0}': {1}" -f $wbPathResolved, $_.Exception.Message)
-        }
-        try {
-            $vbProj = $workbook.VBProject
-        } catch {
-            try { $workbook.Close($false) } catch { }
-            $workbook = $null
-            throw ("Cannot access VBA project object model for '{0}'. Enable 'Trust access to the VBA project object model' in Excel Trust Center (Macro Settings). Details: {1}" -f $wbPathResolved, $_.Exception.Message)
-        }
-
-        $applyRes = Apply-TreportVbaToOpenWorkbook -VbProj $vbProj -ExportDirPath $exportResolved -StdFilesList $stdFiles -DocFilesList $docFiles -MissingDocList $missingDoc -ReportRef ([ref]$report)
-
-        $workbook.Save()
-        $runBinding = Try-GetRunBinding $workbook
-        Write-Step ([ref]$report) ("Workbook saved: {0}" -f $wbPathResolved)
-        Write-Step ([ref]$report) ("Run control binding (best-effort): {0}" -f $runBinding)
-
-        $targetResults += [pscustomobject]@{
-            Path = $wbPathResolved
-            Backup = $backupPath
-            Apply = $applyRes
-        }
-
+    try {
+        $workbook = $excel.Workbooks.Open($targetResolved)
+    } catch {
+        throw ("Failed to open workbook '{0}': {1}" -f $targetResolved, $_.Exception.Message)
+    }
+    try {
+        $vbProj = $workbook.VBProject
+    } catch {
         try { $workbook.Close($false) } catch { }
         $workbook = $null
-        $vbProj = $null
+        throw ("Cannot access VBA project object model for '{0}'. Enable 'Trust access to the VBA project object model' in Excel Trust Center (Macro Settings). Details: {1}" -f $targetResolved, $_.Exception.Message)
     }
 
-    # Export vbaProject.bin and managed exports from the last workbook (primary sync source)
-    if ($SyncExports -and $lastWorkbookPath) {
+    $applyRes = Apply-TreportVbaToOpenWorkbook -VbProj $vbProj -ExportDirPath $exportResolved -StdFilesList $stdFiles -DocFilesList $docFiles -MissingDocList $missingDoc -ReportRef ([ref]$report)
+
+    $workbook.Save()
+    $runBinding = Try-GetRunBinding $workbook
+    Write-Step ([ref]$report) ("Workbook saved: {0}" -f $targetResolved)
+    Write-Step ([ref]$report) ("Run control binding (best-effort): {0}" -f $runBinding)
+
+    $targetResult = [pscustomobject]@{
+        Path = $targetResolved
+        Backup = $backupPath
+        Apply = $applyRes
+    }
+
+    try { $workbook.Close($false) } catch { }
+    $workbook = $null
+    $vbProj = $null
+
+    # Optional explicit sync: exports/bin from the single built workbook (unambiguous source)
+    if ($SyncExports) {
         try {
             Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-            $zip = [System.IO.Compression.ZipFile]::OpenRead($lastWorkbookPath)
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($targetResolved)
             $zipArchive = $zip
             $entry = $zip.Entries | Where-Object { $_.FullName -ieq 'xl/vbaProject.bin' } | Select-Object -First 1
             if ($null -ne $entry) {
@@ -505,9 +459,9 @@ try {
                     try { $inStream.CopyTo($outStream) } finally { $outStream.Dispose() }
                 } finally { $inStream.Dispose() }
                 $vbaBinExported = $true
-                Write-Step ([ref]$report) ("vbaProject.bin exported (from last target): {0}" -f $vbaBinPath)
+                Write-Step ([ref]$report) ("vbaProject.bin exported (from built target): {0}" -f $vbaBinPath)
             } else {
-                Write-Step ([ref]$report) "WARNING: xl/vbaProject.bin not found inside last workbook package; bin export skipped."
+                Write-Step ([ref]$report) "WARNING: xl/vbaProject.bin not found inside built workbook package; bin export skipped."
             }
         } catch {
             Write-Step ([ref]$report) ("WARNING: vbaProject.bin export failed: {0}" -f $_.Exception.Message)
@@ -516,7 +470,7 @@ try {
         }
 
         try {
-            $wbEx = $excel.Workbooks.Open($lastWorkbookPath)
+            $wbEx = $excel.Workbooks.Open($targetResolved)
             try {
                 $vpEx = $wbEx.VBProject
                 $compsFinalForExport = $vpEx.VBComponents
@@ -536,57 +490,66 @@ try {
                         }
                     }
                 }
-                Write-Step ([ref]$report) ("Source exports refreshed from last target ({0}): {1}" -f $exportedBack.Count, ($exportedBack -join ', '))
+                Write-Step ([ref]$report) ("Source exports refreshed from built target ({0}): {1}" -f $exportedBack.Count, ($exportedBack -join ', '))
+                Write-Step ([ref]$report) "NOTE: VBComponent.Export output is not post-normalized by this script (format/EOL/encoding may vary by VBE environment)."
             } finally {
                 try { $wbEx.Close($false) } catch { }
             }
         } catch {
-            Write-Step ([ref]$report) ("WARNING: Could not refresh source exports from last target: {0}" -f $_.Exception.Message)
+            Write-Step ([ref]$report) ("WARNING: Could not refresh source exports from built target: {0}" -f $_.Exception.Message)
         }
-    } elseif (-not $SyncExports) {
-        Write-Step ([ref]$report) "SyncExports disabled: vbaProject.bin and source exports not updated."
+    } else {
+        Write-Step ([ref]$report) "SyncExports: disabled (default). mko_treport/src/vbs/export and mko_treport/src/vbs/vbaProject.bin were not updated."
+    }
+
+    # Optional explicit deploy: replace data\theiss\treport.xlsm with a copy of tracked working workbook
+    if ($DeployToDataTheiss) {
+        $deploySource = $defaultTrackedTarget
+        if (-not (Test-Path -LiteralPath $deploySource)) {
+            throw ("DeployToDataTheiss requested, but tracked workbook not found: {0}" -f $deploySource)
+        }
+        $dataDir = Split-Path -Parent $dataDeployTarget
+        if (-not (Test-Path -LiteralPath $dataDir)) { New-Item -ItemType Directory -Force -Path $dataDir | Out-Null }
+        if (Test-Path -LiteralPath $dataDeployTarget) { Remove-Item -LiteralPath $dataDeployTarget -Force }
+        Copy-Item -LiteralPath $deploySource -Destination $dataDeployTarget -Force
+        Write-Step ([ref]$report) ("DeployToDataTheiss: replaced '{0}' with a copy of '{1}'" -f $dataDeployTarget, $deploySource)
+        Write-Step ([ref]$report) "NOTE: data copy is a derived/runtime copy and is not used as a sync source."
+    } else {
+        Write-Step ([ref]$report) "DeployToDataTheiss: disabled (default). data\\theiss\\treport.xlsm was not modified."
     }
 
     $report += ""
-    $report += "--- Per-target summary ---"
-    $overallOkAll = $true
-    $allIssues = @()
-    foreach ($tr in $targetResults) {
-        $a = $tr.Apply
-        $report += ("Target: {0}" -f $tr.Path)
-        $report += ("  Backup: {0}" -f $tr.Backup)
-        $report += ("  Modules imported (standard .bas): {0}" -f (($a.Imported -join ', ')))
-        $report += ("  Document modules synced: {0}" -f (($a.SyncedDocs -join ', ')))
-        $report += ("  Legacy removed: {0}" -f ($(if ($a.RemovedLegacy.Count -gt 0) { ($a.RemovedLegacy -join ', ') } else { 'none' })))
-        $report += ("  Duplicates removed: {0}" -f ($(if ($a.RemovedDupes.Count -gt 0) { ($a.RemovedDupes -join ', ') } else { 'none' })))
-        $report += ("  Compile/validation: {0}" -f $a.CompileStatus)
-        $report += ("  Final components ({0}): {1}" -f $a.AfterCount, $a.AfterNamesJoined)
-        $report += ("  Expected components present: {0}" -f ($(if ($a.MissingExpected.Count -eq 0) { 'yes' } else { ('NO, missing: ' + ($a.MissingExpected -join ', ')) })))
-        $report += ("  Legacy xlconcat_macro present: {0}" -f ($(if ($a.HasLegacy) { 'YES (unexpected)' } else { 'no' })))
-        $report += ("  Duplicate component names after build: {0}" -f ($(if ($a.DupeFinal.Count -eq 0) { 'none' } else { ($a.DupeFinal -join ', ') })))
-        if ($a.Issues.Count -gt 0) {
-            $report += "  Issues:"
-            foreach ($iss in $a.Issues) { $report += ("    - " + $iss); $allIssues += ("[{0}] {1}" -f $tr.Path, $iss) }
-        }
-        if ($a.MissingExpected.Count -gt 0 -or $a.HasLegacy -or $a.DupeFinal.Count -gt 0) { $overallOkAll = $false }
-    }
+    $report += "--- Summary ---"
+    $a = $targetResult.Apply
+    $report += ("Target: {0}" -f $targetResult.Path)
+    $report += ("Backup: {0}" -f $targetResult.Backup)
+    $report += ("Modules imported (standard .bas): {0}" -f (($a.Imported -join ', ')))
+    $report += ("Document modules synced: {0}" -f (($a.SyncedDocs -join ', ')))
+    $report += ("Legacy removed: {0}" -f ($(if ($a.RemovedLegacy.Count -gt 0) { ($a.RemovedLegacy -join ', ') } else { 'none' })))
+    $report += ("Duplicates removed: {0}" -f ($(if ($a.RemovedDupes.Count -gt 0) { ($a.RemovedDupes -join ', ') } else { 'none' })))
+    $report += ("Compile/validation: {0}" -f $a.CompileStatus)
+    $report += ("Final components ({0}): {1}" -f $a.AfterCount, $a.AfterNamesJoined)
+    $report += ("Expected components present: {0}" -f ($(if ($a.MissingExpected.Count -eq 0) { 'yes' } else { ('NO, missing: ' + ($a.MissingExpected -join ', ')) })))
+    $report += ("Legacy xlconcat_macro present: {0}" -f ($(if ($a.HasLegacy) { 'YES (unexpected)' } else { 'no' })))
+    $report += ("Duplicate component names after build: {0}" -f ($(if ($a.DupeFinal.Count -eq 0) { 'none' } else { ($a.DupeFinal -join ', ') })))
+    $report += ("vbaProject.bin exported (from built target): {0}" -f ($(if ($vbaBinExported) { $vbaBinPath } elseif ($SyncExports) { 'no' } else { 'skipped (SyncExports disabled)' })))
+    $report += ("DeployToDataTheiss: {0}" -f ($(if ($DeployToDataTheiss) { 'completed' } else { 'skipped (disabled)' })))
 
-    $report += ""
-    $report += "--- Global ---"
-    $report += ("vbaProject.bin exported (from last target): {0}" -f ($(if ($vbaBinExported) { $vbaBinPath } elseif ($SyncExports) { 'no' } else { 'skipped (NoSyncExports)' })))
-
-    if ($allIssues.Count -gt 0) {
+    $overallOk = $true
+    if ($a.Issues.Count -gt 0) {
         $report += ""
-        $report += "--- Issues / Prerequisites (aggregated) ---"
-        foreach ($iss in $allIssues) { $report += ("- " + $iss) }
+        $report += "--- Issues / Prerequisites ---"
+        foreach ($iss in $a.Issues) { $report += ("- " + $iss) }
     } else {
         $report += ""
         $report += "--- Issues / Prerequisites ---"
         $report += "- none"
     }
 
+    if ($a.MissingExpected.Count -gt 0 -or $a.HasLegacy -or $a.DupeFinal.Count -gt 0) { $overallOk = $false }
+
     $report += ""
-    $report += ("RESULT: {0}" -f ($(if ($overallOkAll) { 'SUCCESS' } else { 'COMPLETED WITH ISSUES' })))
+    $report += ("RESULT: {0}" -f ($(if ($overallOk) { 'SUCCESS' } else { 'COMPLETED WITH ISSUES' })))
     $report += ("Report file: {0}" -f $ReportPath)
 
     $reportText = ($report -join "`r`n")
@@ -594,7 +557,7 @@ try {
     if ($reportDir -and -not (Test-Path -LiteralPath $reportDir)) { New-Item -ItemType Directory -Force -Path $reportDir | Out-Null }
     [System.IO.File]::WriteAllText($ReportPath, $reportText, [System.Text.Encoding]::UTF8)
 
-    if (-not $overallOkAll) { $exitCode = 1 }
+    if (-not $overallOk) { $exitCode = 1 }
 }
 catch {
     $errMsg = $_.Exception.Message

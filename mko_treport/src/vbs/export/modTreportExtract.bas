@@ -211,7 +211,7 @@ Private Function ConfiguredFreezeValue(ByVal v As Variant, ByVal absentAsZero As
         Exit Function
     End If
 
-    If IsNumeric(v) Then
+    If isNumeric(v) Then
         ConfiguredFreezeValue = CLng(v)
         If ConfiguredFreezeValue < 0 Then ConfiguredFreezeValue = 0
     Else
@@ -316,7 +316,7 @@ Public Sub ApplySheetFormatting(ByVal ws As Worksheet, ByVal freezeRow As Varian
     End If
 
     If hasZoom Then
-        If IsNumeric(zoomVal) Then
+        If isNumeric(zoomVal) Then
             z = CDbl(zoomVal)
             If z > 0 And z <= 5 Then z = z * 100
             If z >= 10 And z <= 400 Then win.Zoom = CLng(z)
@@ -487,6 +487,8 @@ GroupingComFail:
     modTreportConfig.Fail 2703, ctx & ",group_rows=" & CStr(groupColRel) & ",abs_col=" & CStr(absCol) & ",rows_collapsed=" & CStr(rowsCollapsed), _
         "Outline grouping failed after validation: " & Err.Description
 End Sub
+
+
 
 
 
