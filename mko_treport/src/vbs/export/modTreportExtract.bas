@@ -13,15 +13,20 @@ Public Function GetPresentedRange(ByVal pt As PivotTable, ByVal ctx As String) A
     Set GetPresentedRange = rg
 End Function
 
-Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Worksheet, ByVal pasteRow As Long, ByVal pasteCol As Long, ByVal ctx As String, Optional ByVal onlyValues As Boolean = False, Optional ByVal insertRows As Boolean = False) As Range
+Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Worksheet, ByVal pasteRow As Long, ByVal pasteCol As Long, ByVal ctx As String, Optional ByVal onlyValues As Boolean = False, Optional ByVal insertRows As Boolean = False, Optional ByVal skipHeader As Boolean = False) As Range
     ' P05 (GA-P05-1..7): insert_rows=TRUE uses row P=paste_row as sample/template row.
     ' Sequence: copy entire row P and insert H-1 copies starting at P (H=snapshot.Rows.Count),
     ' then write snapshot at (P,paste_col). No helper rows/deletion. Final data P..P+H-1.
+    ' P07 (D-P07-1..4): skip_header=TRUE slices presented range to remove column-header band
+    ' above DataBodyRange; sliced dimensions drive all downstream operations.
     Dim srcRg As Range
+    Dim bodyRg As Range
     Dim dstCell As Range
     Dim pr As Long, pc As Long
     Dim h As Long, w As Long
+    Dim hdrOffset As Long
     Dim i As Long
+    Dim skipCtx As String
 
     pr = pasteRow
     pc = pasteCol
@@ -36,10 +41,41 @@ Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Work
     On Error GoTo EH
 
     Set srcRg = GetPresentedRange(srcPt, ctx)
+
+    If skipHeader Then
+        skipCtx = ctx & ",data_sheet='" & dstWs.Name & "',parameter='skip_header',operation='skip_header_slicing',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & _
+            ",presented_rows=" & CStr(srcRg.Rows.Count) & ",presented_cols=" & CStr(srcRg.Columns.Count) & ",presented_range='" & srcRg.Address(False, False) & "'"
+
+        On Error Resume Next
+        Set bodyRg = srcPt.DataBodyRange
+        On Error GoTo 0
+        If bodyRg Is Nothing Then
+            modTreportConfig.Fail 2708, skipCtx & ",body_range='Nothing'", _
+                "Cannot apply skip_header: PivotTable.DataBodyRange is unavailable for deterministic slicing."
+        End If
+
+        hdrOffset = bodyRg.Row - srcRg.Row
+        skipCtx = skipCtx & ",body_row=" & CStr(bodyRg.Row) & ",body_rows=" & CStr(bodyRg.Rows.Count) & ",body_range='" & bodyRg.Address(False, False) & "',header_offset=" & CStr(hdrOffset)
+
+        If hdrOffset < 0 Then
+            modTreportConfig.Fail 2708, skipCtx, _
+                "Cannot apply skip_header: computed header offset is negative (body.Row - presented.Row = " & CStr(hdrOffset) & ")."
+        ElseIf hdrOffset = 0 Then
+            ' no-op: presented range already starts at data/value body
+        ElseIf hdrOffset >= srcRg.Rows.Count Then
+            modTreportConfig.Fail 2709, skipCtx, _
+                "Cannot apply skip_header: header offset (" & CStr(hdrOffset) & ") is >= presented row count (" & CStr(srcRg.Rows.Count) & "); sliced snapshot would be empty/invalid."
+        Else
+            Set srcRg = srcRg.Offset(hdrOffset, 0).Resize(srcRg.Rows.Count - hdrOffset, srcRg.Columns.Count)
+        End If
+
+        On Error GoTo EH
+    End If
+
     h = srcRg.Rows.Count
     w = srcRg.Columns.Count
     If h <= 0 Or w <= 0 Then
-        modTreportConfig.Fail 2704, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues), _
+        modTreportConfig.Fail 2704, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",skip_header=" & CStr(skipHeader), _
             "Invalid snapshot size for insertion (rows=" & CStr(h) & ",cols=" & CStr(w) & ")."
     End If
 
@@ -60,11 +96,11 @@ Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Work
 
 EHRowPrep:
     Application.CutCopyMode = False
-    modTreportConfig.Fail 2705, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",operation='copy/insert sample row'", _
+    modTreportConfig.Fail 2705, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",skip_header=" & CStr(skipHeader) & ",operation='copy/insert sample row'", _
         "Failed to prepare/insert rows for snapshot insertion (sample row copy): " & Err.Description
 EH:
     Application.CutCopyMode = False
-    modTreportConfig.Fail 2702, ctx & ",data_sheet='" & dstWs.Name & "',parameter='only_values/insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues), _
+    modTreportConfig.Fail 2702, ctx & ",data_sheet='" & dstWs.Name & "',parameter='only_values/insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",skip_header=" & CStr(skipHeader), _
         "Failed to copy/paste pivot snapshot: " & Err.Description
 End Function
 
@@ -302,6 +338,8 @@ GroupingComFail:
     modTreportConfig.Fail 2703, ctx & ",group_rows=" & CStr(groupColRel) & ",abs_col=" & CStr(absCol) & ",rows_collapsed=" & CStr(rowsCollapsed), _
         "Outline grouping failed after validation: " & Err.Description
 End Sub
+
+
 
 
 

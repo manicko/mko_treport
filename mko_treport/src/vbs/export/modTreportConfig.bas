@@ -31,6 +31,7 @@ Public Type TreportDataFile
     template As String
     onlyValues As Boolean
     insertRows As Boolean
+    skipHeader As Boolean
     RowIndex As Long
 End Type
 
@@ -211,6 +212,7 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
         cfg.DataFiles(i).template = ""
         cfg.DataFiles(i).onlyValues = False
         cfg.DataFiles(i).insertRows = False
+        cfg.DataFiles(i).skipHeader = False
 
         If HasColumn(loD, "template") Then
             cfg.DataFiles(i).template = ReadP04TemplateValue( _
@@ -226,6 +228,11 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
             cfg.DataFiles(i).insertRows = ReadP04BooleanValue( _
                 loD.DataBodyRange.Cells(i, ColIndex(loD, "insert_rows")).Value, _
                 "insert_rows", i, cfg.DataFiles(i).DataFile, cfg.DataFiles(i).DataSheet)
+        End If
+        If HasColumn(loD, "skip_header") Then
+            cfg.DataFiles(i).skipHeader = ReadP04BooleanValue( _
+                loD.DataBodyRange.Cells(i, ColIndex(loD, "skip_header")).Value, _
+                "skip_header", i, cfg.DataFiles(i).DataFile, cfg.DataFiles(i).DataSheet)
         End If
     Next i
 
@@ -347,6 +354,8 @@ Public Function NormalizeInputFolder(ByVal inputPath As String) As String
     If Right$(p, 1) <> "\" Then p = p & "\"
     NormalizeInputFolder = p
 End Function
+
+
 
 
 
