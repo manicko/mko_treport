@@ -1,9 +1,12 @@
 Attribute VB_Name = "modTreportFilters"
 Option Explicit
 
-' Generic filter parsing/classification/validation (T1) and generic per-field min/max resolution/apply (T2/T3/D10).
+' Generic filter parsing/classification/validation (T1/B2) and generic per-field min/max resolution/apply (T2/T3/D10).
 ' Parsing and resolution are field-name agnostic. Clause model: <field> = <expr> joined by '|'.
 ' general.delimeter splits list values inside expressions only.
+' B2: max-N offset form supported for scalar and range bound tokens (keyword_max_offset).
+'     Offset grammar anchored to trimmed whole slice: max + optional ws + '-' + optional ws + [0-9]+.
+'     min-N out of scope. No offsets on numeric literals. List elements are unchanged (literal tokens).
 ' T2/D10: min/max resolve from all available numeric values of the referenced field in the pivot
 ' (global per field), captured before applying data-file clauses so resolution is independent of other
 ' clauses' selections. Placeholder max_<field> resolution is handled separately in report-sheet flow
@@ -14,9 +17,18 @@ Public Type ParsedClause
     fieldKey As String       ' normalized identity for duplicate detection / field-state lookup (Trim + LCase$)
     RawExpr As String        ' trimmed expression
     Kind As String           ' "scalar" | "range" | "list"
-    ScalarValue As String
-    RangeStart As String     ' bound token (min/max or numeric-convertible literal), trimmed
-    RangeEnd As String       ' bound token (min/max or numeric-convertible literal), trimmed
+    ScalarValue As String    ' raw scalar token as trimmed (literal or keyword/max-offset token text)
+    ScalarKind As String     ' "literal" | "min" | "max" | "max_offset" (scalar only)
+    ScalarHasOffset As Boolean
+    ScalarOffsetN As Long
+    RangeStart As String     ' bound token raw text (min/max/max-N or numeric-convertible literal), trimmed
+    RangeEnd As String       ' bound token raw text (min/max/max-N or numeric-convertible literal), trimmed
+    RangeStartKind As String ' "min" | "max" | "max_offset" | "numeric"
+    RangeEndKind As String   ' "min" | "max" | "max_offset" | "numeric"
+    RangeStartHasOffset As Boolean
+    RangeEndHasOffset As Boolean
+    RangeStartOffsetN As Long
+    RangeEndOffsetN As Long
     RangeStartIsNumeric As Boolean
     RangeEndIsNumeric As Boolean
     RangeStartNum As Double  ' valid when RangeStartIsNumeric = True
@@ -131,6 +143,56 @@ Private Function IsNumericConvertible(ByVal t As String) As Boolean
     IsNumericConvertible = IsNumericConvertibleToken(t, d)
 End Function
 
+Private Function IsAllDigits(ByVal s As String) As Boolean
+    Dim i As Long
+    Dim ch As String
+    If Len(s) = 0 Then Exit Function
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch < "0" Or ch > "9" Then
+            IsAllDigits = False
+            Exit Function
+        End If
+    Next i
+    IsAllDigits = True
+End Function
+
+Private Function TryParseMaxOffsetToken(ByVal t As String, ByRef outOffsetN As Long, ByRef outNormalized As String) As Boolean
+    ' B2/RC-3: keyword_max_offset = "max" (case-insensitive) + optional ws + "-" + optional ws + digits [0-9]+
+    ' consuming entire trimmed slice. Returns True only for complete offset form.
+    Dim s As String
+    Dim pDash As Long
+    Dim leftPart As String
+    Dim rightPart As String
+    Dim nVal As Double
+
+    TryParseMaxOffsetToken = False
+    outOffsetN = 0
+    outNormalized = vbNullString
+    s = modTreportConfig.Norm(t)
+    If Len(s) < 5 Then Exit Function ' "max-0"
+    If LCase$(Left$(s, 3)) <> "max" Then Exit Function
+
+    pDash = InStr(4, s, "-", vbBinaryCompare)
+    If pDash = 0 Then Exit Function
+    leftPart = modTreportConfig.Norm(Left$(s, pDash - 1))
+    rightPart = modTreportConfig.Norm(Mid$(s, pDash + 1))
+    If LCase$(leftPart) <> "max" Then Exit Function
+    If Len(rightPart) = 0 Then Exit Function
+    If Not IsAllDigits(rightPart) Then Exit Function
+
+    On Error GoTo EHNum
+    nVal = CDbl(rightPart)
+    If nVal < 0# Or nVal > 2147483647# Then Exit Function
+    outOffsetN = CLng(nVal)
+    outNormalized = "max-" & rightPart
+    TryParseMaxOffsetToken = True
+    Exit Function
+EHNum:
+    Err.Clear
+    TryParseMaxOffsetToken = False
+End Function
+
 Private Function IsMinMaxToken(ByVal t As String) As Boolean
     Dim s As String
     s = LCase$(modTreportConfig.Norm(t))
@@ -138,10 +200,52 @@ Private Function IsMinMaxToken(ByVal t As String) As Boolean
 End Function
 
 Private Function IsBoundToken(ByVal t As String) As Boolean
-    ' Range bound token: min/max (case-insensitive) or numeric-convertible literal (Q2-G2/Q2-G3).
+    ' Range/scalar bound token: min, max, max-N offset (complete), or numeric-convertible literal.
     Dim d As Double
-    IsBoundToken = IsMinMaxToken(t) Or IsNumericConvertibleToken(t, d)
+    Dim offN As Long
+    Dim normOff As String
+    If IsMinMaxToken(t) Then
+        IsBoundToken = True
+    ElseIf TryParseMaxOffsetToken(t, offN, normOff) Then
+        IsBoundToken = True
+    Else
+        IsBoundToken = IsNumericConvertibleToken(t, d)
+    End If
 End Function
+
+Private Sub ParseBoundToken(ByVal t As String, ByRef outKind As String, ByRef outHasOffset As Boolean, ByRef outOffsetN As Long, ByRef outIsNumeric As Boolean, ByRef outNum As Double)
+    Dim s As String
+    Dim normOff As String
+    s = modTreportConfig.Norm(t)
+    outKind = vbNullString
+    outHasOffset = False
+    outOffsetN = 0
+    outIsNumeric = False
+    outNum = 0#
+
+    If TryParseMaxOffsetToken(s, outOffsetN, normOff) Then
+        outKind = "max_offset"
+        outHasOffset = True
+        Exit Sub
+    End If
+
+    Select Case LCase$(s)
+        Case "min"
+            outKind = "min"
+            Exit Sub
+        Case "max"
+            outKind = "max"
+            Exit Sub
+    End Select
+
+    If IsNumericConvertibleToken(s, outNum) Then
+        outKind = "numeric"
+        outIsNumeric = True
+        Exit Sub
+    End If
+
+    outKind = "invalid"
+End Sub
 
 Private Function CountValidRangeSplits(ByVal inner As String, ByRef outLeft As String, ByRef outRight As String) As Long
     Dim p As Long
@@ -175,7 +279,10 @@ End Function
 
 
 Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ctx As String)
-    ' Disambiguation (T1): delimiter present => list; else single valid outer-paren range => range; else scalar.
+    ' Disambiguation (T1/B2): delimiter present => list (unchanged; max-N in list stays literal element token);
+    ' else outer-paren with exactly one valid split into complete bound tokens => range; else scalar.
+    ' RC-3/RC-4: complete bound tokens = numeric literal, min, max, max-N (entire trimmed slice). Offset '-'
+    ' consumed inside bound token, never structural separator.
     Dim e As String
     Dim inner As String
     Dim parts() As String
@@ -194,8 +301,17 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
 
     c.Kind = vbNullString
     c.ScalarValue = vbNullString
+    c.ScalarKind = vbNullString
+    c.ScalarHasOffset = False
+    c.ScalarOffsetN = 0
     c.RangeStart = vbNullString
     c.RangeEnd = vbNullString
+    c.RangeStartKind = vbNullString
+    c.RangeEndKind = vbNullString
+    c.RangeStartHasOffset = False
+    c.RangeEndHasOffset = False
+    c.RangeStartOffsetN = 0
+    c.RangeEndOffsetN = 0
     c.RangeStartIsNumeric = False
     c.RangeEndIsNumeric = False
     c.RangeStartNum = 0#
@@ -203,6 +319,7 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
     c.HasList = False
 
     ' List: expression contains general.delimeter (list values inside expressions only).
+    ' RC-2: preserve existing list parsing/normalization/element handling exactly.
     If InStr(1, e, delim, vbBinaryCompare) > 0 Then
         c.Kind = "list"
         inner = StripOuterParens(e)
@@ -218,7 +335,7 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
         Exit Sub
     End If
 
-    ' Range: outer parentheses and exactly one valid split into two bound tokens.
+    ' Range: outer parentheses and exactly one valid split into two complete bound tokens.
     If Left$(e, 1) = "(" And Right$(e, 1) = ")" And Len(e) >= 5 Then
         inner = Mid$(e, 2, Len(e) - 2)
         splitCount = CountValidRangeSplits(inner, leftB, rightB)
@@ -226,15 +343,15 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
             c.Kind = "range"
             c.RangeStart = leftB
             c.RangeEnd = rightB
-            c.RangeStartIsNumeric = IsNumericConvertibleToken(leftB, c.RangeStartNum)
-            c.RangeEndIsNumeric = IsNumericConvertibleToken(rightB, c.RangeEndNum)
+            ParseBoundToken leftB, c.RangeStartKind, c.RangeStartHasOffset, c.RangeStartOffsetN, c.RangeStartIsNumeric, c.RangeStartNum
+            ParseBoundToken rightB, c.RangeEndKind, c.RangeEndHasOffset, c.RangeEndOffsetN, c.RangeEndIsNumeric, c.RangeEndNum
 
-            ' Q2-G3: bounds must be min/max or numeric-convertible literals (range for non-numeric values invalid).
-            If Not (IsMinMaxToken(leftB) Or c.RangeStartIsNumeric) Then
-                modTreportConfig.Fail 2322, exprCtx, "Range start bound '" & leftB & "' is not numeric-convertible and not min/max."
+            ' Bounds must be min/max, max-N offset, or numeric-convertible literals.
+            If Not (c.RangeStartKind = "min" Or c.RangeStartKind = "max" Or c.RangeStartKind = "max_offset" Or c.RangeStartIsNumeric) Then
+                modTreportConfig.Fail 2322, exprCtx & ",token='" & leftB & "'", "Range start bound '" & leftB & "' is not a valid bound token (expected min, max, max-N, or numeric literal)."
             End If
-            If Not (IsMinMaxToken(rightB) Or c.RangeEndIsNumeric) Then
-                modTreportConfig.Fail 2323, exprCtx, "Range end bound '" & rightB & "' is not numeric-convertible and not min/max."
+            If Not (c.RangeEndKind = "min" Or c.RangeEndKind = "max" Or c.RangeEndKind = "max_offset" Or c.RangeEndIsNumeric) Then
+                modTreportConfig.Fail 2323, exprCtx & ",token='" & rightB & "'", "Range end bound '" & rightB & "' is not a valid bound token (expected min, max, max-N, or numeric literal)."
             End If
 
             ' Parse-time bound validation when both bounds are numeric literals.
@@ -247,8 +364,20 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
         End If
     End If
 
+    ' Scalar: complete max/min/max-N bound token => keyword semantics; else existing literal behavior.
     c.Kind = "scalar"
     c.ScalarValue = e
+    Dim sk As String, sh As Boolean, sn As Long, sNum As Boolean, sNumV As Double
+    ParseBoundToken e, sk, sh, sn, sNum, sNumV
+    If sk = "min" Or sk = "max" Or sk = "max_offset" Then
+        c.ScalarKind = sk
+        c.ScalarHasOffset = sh
+        c.ScalarOffsetN = sn
+    Else
+        c.ScalarKind = "literal"
+        c.ScalarHasOffset = False
+        c.ScalarOffsetN = 0
+    End If
 End Sub
 
 ' (Parsing helpers above provide deterministic bound/numeric checks for T1.)
@@ -350,34 +479,81 @@ Private Function GetOrCreateFieldState(ByRef rc As ResolvedContext, ByVal pt As 
     GetOrCreateFieldState = stateArr
 End Function
 
-Private Function ResolveGlobalBound(ByVal token As String, ByRef c As ParsedClause, ByRef rc As ResolvedContext, ByVal ctx As String) As Double
-    ' Resolve min/max/numeric-literal bound token using pre-resolved global per-field state (T2).
-    Dim t As String
-    Dim tokNum As Double
+Private Function BoundTokenCtx(ByVal token As String, ByVal kind As String, ByVal hasOffset As Boolean, ByVal offsetN As Long) As String
+    Dim s As String
+    s = ",token='" & token & "'"
+    If hasOffset Or kind = "max_offset" Then s = s & ",N=" & CStr(offsetN)
+    BoundTokenCtx = s
+End Function
+
+Private Function ResolveGlobalBound(ByVal token As String, ByVal boundKind As String, ByVal hasOffset As Boolean, ByVal offsetN As Long, ByVal numericValue As Double, ByVal isNumeric As Boolean, ByRef c As ParsedClause, ByRef rc As ResolvedContext, ByVal ctx As String) As Double
+    ' Resolve min/max/max-N/numeric-literal bound token using pre-resolved global per-field state (T2/B2/D1/D2).
     Dim st As Variant
+    Dim maxV As Double
+    Dim computed As Double
+    Dim domain As Collection
+    Dim tokCtx As String
+    Dim baseCtx As String
 
-    t = LCase$(modTreportConfig.Norm(token))
-    If IsNumericConvertibleToken(t, tokNum) Then
-        ResolveGlobalBound = tokNum
+    If isNumeric Then
+        ResolveGlobalBound = numericValue
         Exit Function
     End If
 
-    st = rc.FieldStates(c.fieldKey)
-    If t = "min" Then
-        If Not CBool(st(0)) Then
-            modTreportConfig.Fail 2313, ctx & ",field='" & c.fieldName & "',token='" & token & "'", "No numeric values available to resolve global '" & token & "'."
-        End If
-        ResolveGlobalBound = CDbl(st(1))
-        Exit Function
-    ElseIf t = "max" Then
-        If Not CBool(st(0)) Then
-            modTreportConfig.Fail 2313, ctx & ",field='" & c.fieldName & "',token='" & token & "'", "No numeric values available to resolve global '" & token & "'."
-        End If
-        ResolveGlobalBound = CDbl(st(2))
-        Exit Function
-    End If
+    tokCtx = BoundTokenCtx(token, boundKind, hasOffset, offsetN)
+    baseCtx = ctx & ",field='" & c.fieldName & "',expr='" & c.RawExpr & "'" & tokCtx
 
-    modTreportConfig.Fail 2314, ctx & ",field='" & c.fieldName & "',token='" & token & "'", "Unsupported bound token '" & token & "'."
+    Select Case boundKind
+        Case "min"
+            st = rc.FieldStates(c.fieldKey)
+            If Not CBool(st(0)) Then
+                modTreportConfig.Fail 2313, baseCtx & ",resolved_max=<n/a>", "No numeric values available to resolve global '" & token & "'."
+            End If
+            ResolveGlobalBound = CDbl(st(1))
+            Exit Function
+
+        Case "max"
+            st = rc.FieldStates(c.fieldKey)
+            If Not CBool(st(0)) Then
+                modTreportConfig.Fail 2313, baseCtx & ",resolved_max=<n/a>", "No numeric values available to resolve global '" & token & "'."
+            End If
+            ResolveGlobalBound = CDbl(st(2))
+            Exit Function
+
+        Case "max_offset"
+            st = rc.FieldStates(c.fieldKey)
+            If Not CBool(st(0)) Then
+                modTreportConfig.Fail 2313, baseCtx & ",resolved_max=<n/a>,computed=<n/a>", "No numeric values/domain available to resolve offset bound '" & token & "'."
+            End If
+            maxV = CDbl(st(2))
+            If CDbl(offsetN) < 0# Or CDbl(offsetN) >= maxV Then
+                ' D1/RC-1: include field,resolved max,N,token/expr; computed included if derived/useful.
+                computed = maxV - CDbl(offsetN)
+                modTreportConfig.Fail 2324, baseCtx & ",resolved_max=" & CStr(maxV) & ",computed=" & CStr(computed), "Invalid max-offset: N must satisfy 0 <= N < max_value (field='" & c.fieldName & "', resolved_max=" & CStr(maxV) & ", N=" & CStr(offsetN) & ", computed=" & CStr(computed) & ", token='" & token & "')."
+            End If
+            computed = maxV - CDbl(offsetN)
+            Set domain = st(3)
+            If Not NumericDomainContains(domain, computed) Then
+                ' D2/RC-1: include field,resolved max,N,computed and context.
+                modTreportConfig.Fail 2325, baseCtx & ",resolved_max=" & CStr(maxV) & ",computed=" & CStr(computed), "Computed max-offset value is not present in field numeric domain (field='" & c.fieldName & "', resolved_max=" & CStr(maxV) & ", N=" & CStr(offsetN) & ", computed=" & CStr(computed) & ", token='" & token & "')."
+            End If
+            ResolveGlobalBound = computed
+            Exit Function
+    End Select
+
+    modTreportConfig.Fail 2314, baseCtx, "Unsupported bound token '" & token & "'."
+End Function
+
+Private Function NumericDomainContains(ByVal domain As Collection, ByVal valueD As Double) As Boolean
+    Dim i As Long
+    If domain Is Nothing Then Exit Function
+    For i = 1 To domain.Count
+        If CDbl(domain(i)) = valueD Then
+            NumericDomainContains = True
+            Exit Function
+        End If
+    Next i
+    NumericDomainContains = False
 End Function
 
 Public Function ResolveFilterContext(ByVal pt As PivotTable, ByRef pf As ParsedFilters, ByVal ctx As String) As ResolvedContext
@@ -421,14 +597,13 @@ Private Sub ApplySingleClauseSelection(ByVal pt As PivotTable, ByRef c As Parsed
 End Sub
 
 Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedClause, ByRef rc As ResolvedContext, ByVal ctx As String) As Collection
-    ' Build desired pivot-item values for a clause using generic global per-field min/max resolution (D10).
+    ' Build desired pivot-item values for a clause using generic global per-field min/max/max-N resolution (D10/B2/D1/D2).
     ' No placeholder representative tracking (rev.7: max_<field> resolved independently in report-sheet flow).
     Dim col As New Collection
     Dim pfld As PivotField
     Dim domain As Collection
     Dim st As Variant
     Dim loB As Double, hiB As Double
-    Dim s As String
     Dim i As Long, j As Long
     Dim matched As Boolean
     Dim v As Variant
@@ -437,20 +612,19 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
     Set pfld = modTreportPivot.GetPivotFieldRequired(pt, c.fieldName, ctx)
     Select Case c.Kind
         Case "scalar"
-            s = modTreportConfig.Norm(c.ScalarValue)
-            If LCase$(s) = "max" Or LCase$(s) = "min" Then
-                resolvedNum = ResolveGlobalBound(s, c, rc, ctx)
+            If c.ScalarKind = "min" Or c.ScalarKind = "max" Or c.ScalarKind = "max_offset" Then
+                resolvedNum = ResolveGlobalBound(c.ScalarValue, c.ScalarKind, c.ScalarHasOffset, c.ScalarOffsetN, 0#, False, c, rc, ctx)
                 col.Add NormalizeToPivotItem(pfld, CStr(resolvedNum))
             Else
-                col.Add NormalizeToPivotItem(pfld, s)
+                col.Add NormalizeToPivotItem(pfld, modTreportConfig.Norm(c.ScalarValue))
             End If
         Case "range"
-            loB = ResolveGlobalBound(c.RangeStart, c, rc, ctx & ",range_start")
-            hiB = ResolveGlobalBound(c.RangeEnd, c, rc, ctx & ",range_end")
-            If loB > hiB Then modTreportConfig.Fail 2319, ctx & ",field='" & c.fieldName & "'", "Range start is greater than range end after resolving bounds (" & CStr(loB) & " > " & CStr(hiB) & ")."
+            loB = ResolveGlobalBound(c.RangeStart, c.RangeStartKind, c.RangeStartHasOffset, c.RangeStartOffsetN, c.RangeStartNum, c.RangeStartIsNumeric, c, rc, ctx & ",range_start")
+            hiB = ResolveGlobalBound(c.RangeEnd, c.RangeEndKind, c.RangeEndHasOffset, c.RangeEndOffsetN, c.RangeEndNum, c.RangeEndIsNumeric, c, rc, ctx & ",range_end")
+            If loB > hiB Then modTreportConfig.Fail 2319, ctx & ",field='" & c.fieldName & "',expr='" & c.RawExpr & "'", "Range start is greater than range end after resolving bounds (" & CStr(loB) & " > " & CStr(hiB) & ")."
             st = rc.FieldStates(c.fieldKey)
             If Not CBool(st(0)) Then
-                modTreportConfig.Fail 2320, ctx & ",field='" & c.fieldName & "'", "No available numeric values matched range (" & c.RangeStart & "-" & c.RangeEnd & ")."
+                modTreportConfig.Fail 2320, ctx & ",field='" & c.fieldName & "',expr='" & c.RawExpr & "'", "No available numeric values matched range (" & c.RangeStart & "-" & c.RangeEnd & ")."
             End If
             Set domain = st(3)
             matched = False
@@ -461,13 +635,13 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
                     matched = True
                 End If
             Next i
-            If Not matched Then modTreportConfig.Fail 2320, ctx & ",field='" & c.fieldName & "'", "No available numeric values matched range (" & c.RangeStart & "-" & c.RangeEnd & ")."
+            If Not matched Then modTreportConfig.Fail 2320, ctx & ",field='" & c.fieldName & "',expr='" & c.RawExpr & "'", "No available numeric values matched range (" & c.RangeStart & "-" & c.RangeEnd & ")."
         Case "list"
             For j = LBound(c.ListValues) To UBound(c.ListValues)
                 col.Add NormalizeToPivotItem(pfld, c.ListValues(j))
             Next j
         Case Else
-            modTreportConfig.Fail 2321, ctx & ",field='" & c.fieldName & "'", "Unsupported filter expression kind."
+            modTreportConfig.Fail 2321, ctx & ",field='" & c.fieldName & "',expr='" & c.RawExpr & "'", "Unsupported filter expression kind."
     End Select
     Set BuildDesiredValues = col
 End Function
