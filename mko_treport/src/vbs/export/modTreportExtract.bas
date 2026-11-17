@@ -185,44 +185,148 @@ End Sub
 ' and pastes snapshot at P-1 with returned range at actual placement (expected P-1..P-1+H-1, A1 L3-verified).
 ' Legacy/non-template insert_rows=TRUE retains P05 behavior (H-1 at P when H>1, paste/return at P). No deletions.
 
+Private Function IsFreezeParamAbsent(ByVal v As Variant) As Boolean
+    If IsEmpty(v) Or IsNull(v) Then
+        IsFreezeParamAbsent = True
+        Exit Function
+    End If
+    If IsError(v) Then
+        IsFreezeParamAbsent = True
+        Exit Function
+    End If
+    If VarType(v) = vbString Then
+        IsFreezeParamAbsent = (Len(Trim$(CStr(v))) = 0)
+        Exit Function
+    End If
+    IsFreezeParamAbsent = False
+End Function
+
+Private Function ConfiguredFreezeValue(ByVal v As Variant, ByVal absentAsZero As Boolean) As Long
+    If IsFreezeParamAbsent(v) Then
+        If absentAsZero Then
+            ConfiguredFreezeValue = 0
+        Else
+            ConfiguredFreezeValue = 0
+        End If
+        Exit Function
+    End If
+
+    If IsNumeric(v) Then
+        ConfiguredFreezeValue = CLng(v)
+        If ConfiguredFreezeValue < 0 Then ConfiguredFreezeValue = 0
+    Else
+        ConfiguredFreezeValue = 0
+    End If
+End Function
+
 Public Sub ApplySheetFormatting(ByVal ws As Worksheet, ByVal freezeRow As Variant, ByVal freezeCol As Variant, ByVal zoomVal As Variant, ByVal ctx As String, Optional ByVal preserveTargetSettings As Boolean = False)
-    Dim hasZoom As Boolean
-    Dim hasFreeze As Boolean
+    Dim wb As Workbook
+    Dim win As Window
     Dim fr As Long, fc As Long
+    Dim hasFreeze As Boolean
+    Dim hasZoom As Boolean
+    Dim rowAbsent As Boolean
+    Dim colAbsent As Boolean
+    Dim applyFreezeConfig As Boolean
     Dim z As Double
-    Dim selRow As Long, selCol As Long
+    Dim ctxSheet As String
+    Dim ctxFreeze As String
+
+    If ws Is Nothing Then
+        modTreportConfig.Fail 2706, ctx & ",operation='apply_sheet_formatting'", "Target worksheet is Nothing."
+    End If
+
+    Set wb = ws.Parent
+    ctxSheet = ctx & ",data_sheet='" & ws.Name & "'"
+
+    rowAbsent = IsFreezeParamAbsent(freezeRow)
+    colAbsent = IsFreezeParamAbsent(freezeCol)
+    applyFreezeConfig = (Not preserveTargetSettings) Or (Not rowAbsent) Or (Not colAbsent)
+
+    If applyFreezeConfig Then
+        fr = ConfiguredFreezeValue(freezeRow, True)
+        fc = ConfiguredFreezeValue(freezeCol, True)
+    Else
+        fr = 0
+        fc = 0
+    End If
+    hasFreeze = (fr > 0 Or fc > 0)
+    ctxFreeze = ctxSheet & ",freeze_row_cfg='" & CStr(freezeRow) & "',freeze_col_cfg='" & CStr(freezeCol) & "',freeze_row_absent=" & CStr(rowAbsent) & ",freeze_col_absent=" & CStr(colAbsent) & ",preserve_target=" & CStr(preserveTargetSettings) & ",apply_freeze_config=" & CStr(applyFreezeConfig) & ",split_row=" & CStr(fr) & ",split_col=" & CStr(fc)
 
     hasZoom = (Not IsEmpty(zoomVal) And Not IsNull(zoomVal) And Len(modTreportConfig.Norm(zoomVal)) > 0)
-    fr = 0: fc = 0
-    If Not IsEmpty(freezeRow) And Not IsNull(freezeRow) And isNumeric(freezeRow) Then fr = CLng(freezeRow)
-    If Not IsEmpty(freezeCol) And Not IsNull(freezeCol) And isNumeric(freezeCol) Then fc = CLng(freezeCol)
-    hasFreeze = (fr > 0 Or fc > 0)
 
-    On Error Resume Next
+    On Error GoTo EH
+
+    ' Activate target workbook/worksheet and verify ActiveWindow belongs to the target context.
+    wb.Activate
     ws.Activate
+
+    Set win = ActiveWindow
+    If win Is Nothing Then
+        modTreportConfig.Fail 2706, ctxFreeze & ",operation='resolve_window'", "ActiveWindow is not available after activating target worksheet."
+    End If
+    If Not win.Parent Is wb Then
+        modTreportConfig.Fail 2706, ctxFreeze & ",operation='resolve_window'", "ActiveWindow does not belong to the target workbook."
+    End If
+    If Not win.ActiveSheet Is ws Then
+        modTreportConfig.Fail 2706, ctxFreeze & ",operation='resolve_window'", "ActiveWindow does not display the target worksheet after activation."
+    End If
+
+    ' Deterministic pane baseline and application.
+    ' For template sheets with absent freeze settings, preserve existing fixation as-is.
+    If applyFreezeConfig Then
+        win.FreezePanes = False
+        win.Split = False
+        On Error Resume Next
+        win.SplitRow = 0
+        win.SplitColumn = 0
+        On Error GoTo EH
+
+        If hasFreeze Then
+            win.SplitRow = fr
+            win.SplitColumn = fc
+            win.FreezePanes = True
+
+            If Not win.FreezePanes Then
+                modTreportConfig.Fail 2706, ctxFreeze & ",operation='apply_freeze'", "FreezePanes was not enabled after applying configured split."
+            End If
+            If win.SplitRow <> fr Then
+                modTreportConfig.Fail 2706, ctxFreeze & ",operation='verify_freeze',actual_split_row=" & CStr(win.SplitRow), "Actual SplitRow does not match configured freeze_row."
+            End If
+            If win.SplitColumn <> fc Then
+                modTreportConfig.Fail 2706, ctxFreeze & ",operation='verify_freeze',actual_split_col=" & CStr(win.SplitColumn), "Actual SplitColumn does not match configured freeze_col."
+            End If
+        Else
+            ' Explicit/configured no-freeze state: panes must remain disabled.
+            If win.FreezePanes Then
+                modTreportConfig.Fail 2706, ctxFreeze & ",operation='verify_freeze',actual_freeze_panes=True", "FreezePanes remained enabled after applying configured no-freeze state."
+            End If
+            If win.SplitRow <> 0 Then
+                modTreportConfig.Fail 2706, ctxFreeze & ",operation='verify_freeze',actual_split_row=" & CStr(win.SplitRow), "SplitRow is not zero after applying configured no-freeze state."
+            End If
+            If win.SplitColumn <> 0 Then
+                modTreportConfig.Fail 2706, ctxFreeze & ",operation='verify_freeze',actual_split_col=" & CStr(win.SplitColumn), "SplitColumn is not zero after applying configured no-freeze state."
+            End If
+        End If
+    End If
+
+    ' Display/zoom overrides: preserve template settings unless explicitly configured/overridden.
     If Not preserveTargetSettings Then
-        ActiveWindow.FreezePanes = False
-        ActiveWindow.DisplayGridlines = False
-    Else
-        ' GA-4: preserve template/display settings by default; apply explicit report overrides only.
-        If hasFreeze Then ActiveWindow.FreezePanes = False
+        win.DisplayGridlines = False
     End If
 
-    If hasZoom And isNumeric(zoomVal) Then
-        z = CDbl(zoomVal)
-        If z > 0 And z <= 5 Then z = z * 100
-        If z >= 10 And z <= 400 Then ActiveWindow.Zoom = CLng(z)
+    If hasZoom Then
+        If IsNumeric(zoomVal) Then
+            z = CDbl(zoomVal)
+            If z > 0 And z <= 5 Then z = z * 100
+            If z >= 10 And z <= 400 Then win.Zoom = CLng(z)
+        End If
     End If
 
-    If hasFreeze Then
-        selRow = IIf(fr > 0, fr + 1, 1)
-        selCol = IIf(fc > 0, fc + 1, 1)
-        ws.Cells(selRow, selCol).Select
-        ActiveWindow.FreezePanes = True
-    End If
+    Exit Sub
 
-    ws.Cells(1, 1).Select
-    On Error GoTo 0
+EH:
+    modTreportConfig.Fail 2706, ctxFreeze & ",operation='apply_sheet_formatting'", "Failed to apply sheet formatting deterministically: " & Err.Description
 End Sub
 
 Private Sub GroupingSkipDiagnostic(ByVal ctx As String, ByVal reason As String)
