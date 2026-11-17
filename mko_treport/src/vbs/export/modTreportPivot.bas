@@ -244,7 +244,7 @@ Public Function FieldAvailableNumericValues(ByVal pf As PivotField) As Collectio
     On Error Resume Next
     For i = 1 To pf.PivotItems.Count
         n = modTreportConfig.Norm(pf.PivotItems(i).Name)
-        If IsNumeric(n) Then
+        If isNumeric(n) Then
             key = CStr(CDbl(n))
             Err.Clear
             col.Add CDbl(n), "k" & key
@@ -410,7 +410,7 @@ Private Function FindMatchingAvailable(ByVal avail As Collection, ByVal tok As S
         If StrComp(a, t, vbBinaryCompare) = 0 Then
             FindMatchingAvailable = a: Exit Function
         End If
-        If IsNumeric(a) And IsNumeric(t) Then
+        If isNumeric(a) And isNumeric(t) Then
             If CDbl(a) = CDbl(t) Then
                 FindMatchingAvailable = a: Exit Function
             End If
@@ -425,9 +425,9 @@ Private Function IsWantedItem(ByVal wanted As Object, ByVal itemName As String) 
         Exit Function
     End If
     Dim k As Variant
-    If IsNumeric(itemName) Then
+    If isNumeric(itemName) Then
         For Each k In wanted.Keys
-            If IsNumeric(CStr(k)) Then
+            If isNumeric(CStr(k)) Then
                 If CDbl(CStr(k)) = CDbl(itemName) Then
                     IsWantedItem = True
                     Exit Function

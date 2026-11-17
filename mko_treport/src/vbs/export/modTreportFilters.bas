@@ -16,7 +16,7 @@ Public Type ParsedClause
     fieldName As String      ' trimmed as configured
     fieldKey As String       ' normalized identity for duplicate detection / field-state lookup (Trim + LCase$)
     RawExpr As String        ' trimmed expression
-    Kind As String           ' "scalar" | "range" | "list"
+    kind As String           ' "scalar" | "range" | "list"
     ScalarValue As String    ' raw scalar token as trimmed (literal or keyword/max-offset token text)
     ScalarKind As String     ' "literal" | "min" | "max" | "max_offset" (scalar only)
     ScalarHasOffset As Boolean
@@ -299,7 +299,7 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
     If Len(e) = 0 Then modTreportConfig.Fail 2305, exprCtx, "Empty expression."
     If Len(delim) = 0 Then modTreportConfig.Fail 2306, ctx & ",field='" & c.fieldName & "'", "general.delimeter is required for filter parsing."
 
-    c.Kind = vbNullString
+    c.kind = vbNullString
     c.ScalarValue = vbNullString
     c.ScalarKind = vbNullString
     c.ScalarHasOffset = False
@@ -321,7 +321,7 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
     ' List: expression contains general.delimeter (list values inside expressions only).
     ' RC-2: preserve existing list parsing/normalization/element handling exactly.
     If InStr(1, e, delim, vbBinaryCompare) > 0 Then
-        c.Kind = "list"
+        c.kind = "list"
         inner = StripOuterParens(e)
         parts = Split(inner, delim)
         ReDim c.ListValues(LBound(parts) To UBound(parts))
@@ -340,7 +340,7 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
         inner = Mid$(e, 2, Len(e) - 2)
         splitCount = CountValidRangeSplits(inner, leftB, rightB)
         If splitCount = 1 Then
-            c.Kind = "range"
+            c.kind = "range"
             c.RangeStart = leftB
             c.RangeEnd = rightB
             ParseBoundToken leftB, c.RangeStartKind, c.RangeStartHasOffset, c.RangeStartOffsetN, c.RangeStartIsNumeric, c.RangeStartNum
@@ -365,7 +365,7 @@ Public Sub ClassifyExpr(ByRef c As ParsedClause, ByVal delim As String, ByVal ct
     End If
 
     ' Scalar: complete max/min/max-N bound token => keyword semantics; else existing literal behavior.
-    c.Kind = "scalar"
+    c.kind = "scalar"
     c.ScalarValue = e
     Dim sk As String, sh As Boolean, sn As Long, sNum As Boolean, sNumV As Double
     ParseBoundToken e, sk, sh, sn, sNum, sNumV
@@ -610,7 +610,7 @@ Private Function BuildDesiredValues(ByVal pt As PivotTable, ByRef c As ParsedCla
     Dim resolvedNum As Double
 
     Set pfld = modTreportPivot.GetPivotFieldRequired(pt, c.fieldName, ctx)
-    Select Case c.Kind
+    Select Case c.kind
         Case "scalar"
             If c.ScalarKind = "min" Or c.ScalarKind = "max" Or c.ScalarKind = "max_offset" Then
                 resolvedNum = ResolveGlobalBound(c.ScalarValue, c.ScalarKind, c.ScalarHasOffset, c.ScalarOffsetN, 0#, False, c, rc, ctx)
@@ -656,7 +656,7 @@ Public Function NormalizeToPivotItem(ByVal pf As PivotField, ByVal token As Stri
             NormalizeToPivotItem = n
             Exit Function
         End If
-        If IsNumeric(n) And IsNumeric(t) Then
+        If isNumeric(n) And isNumeric(t) Then
             If CDbl(n) = CDbl(t) Then
                 NormalizeToPivotItem = n
                 Exit Function

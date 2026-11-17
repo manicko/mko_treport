@@ -198,15 +198,15 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
         outUsedSheetNames(r).Add LCase$(sheetName), True
 
         pr = 1: pc = 1
-        If IsNumeric(cfg.DataFiles(dfIdx).pasteRow) And Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).pasteRow)) > 0 Then pr = CLng(cfg.DataFiles(dfIdx).pasteRow)
-        If IsNumeric(cfg.DataFiles(dfIdx).pasteCol) And Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).pasteCol)) > 0 Then pc = CLng(cfg.DataFiles(dfIdx).pasteCol)
+        If isNumeric(cfg.DataFiles(dfIdx).pasteRow) And Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).pasteRow)) > 0 Then pr = CLng(cfg.DataFiles(dfIdx).pasteRow)
+        If isNumeric(cfg.DataFiles(dfIdx).pasteCol) And Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).pasteCol)) > 0 Then pc = CLng(cfg.DataFiles(dfIdx).pasteCol)
         If pr <= 0 Then pr = 1
         If pc <= 0 Then pc = 1
 
         Set outWs = modTreportOutput.AddReportSheet(outBooks(r), sheetName, repCtx)
         Set insertedRng = modTreportExtract.CopyPivotSnapshot(pt, outWs, pr, pc, repCtx)
         modTreportExtract.ApplySheetFormatting outWs, cfg.DataFiles(dfIdx).freezeRow, cfg.DataFiles(dfIdx).freezeCol, cfg.DataFiles(dfIdx).Zoom, repCtx
-        modTreportExtract.ApplyOutlineGrouping insertedRng, cfg.DataFiles(dfIdx).GroupRows, cfg.General.RowsCollapsed, repCtx & ",output='" & outNames(r) & "'"
+        modTreportExtract.ApplyOutlineGrouping insertedRng, cfg.DataFiles(dfIdx).GroupRows, cfg.General.rowsCollapsed, repCtx & ",output='" & outNames(r) & "'"
         Set insertedRng = Nothing
         Set outWs = Nothing
     Next r

@@ -61,7 +61,7 @@ Public Sub ApplySheetFormatting(ByVal ws As Worksheet, ByVal freezeRow As Varian
     ActiveWindow.FreezePanes = False
     ActiveWindow.DisplayGridlines = False
     If Not IsEmpty(zoomVal) And Not IsNull(zoomVal) And Len(modTreportConfig.Norm(zoomVal)) > 0 Then
-        If IsNumeric(zoomVal) Then
+        If isNumeric(zoomVal) Then
             Dim z As Double
             z = CDbl(zoomVal)
             If z > 0 And z <= 5 Then z = z * 100
@@ -70,8 +70,8 @@ Public Sub ApplySheetFormatting(ByVal ws As Worksheet, ByVal freezeRow As Varian
     End If
     Dim fr As Long, fc As Long
     fr = 0: fc = 0
-    If Not IsEmpty(freezeRow) And Not IsNull(freezeRow) And IsNumeric(freezeRow) Then fr = CLng(freezeRow)
-    If Not IsEmpty(freezeCol) And Not IsNull(freezeCol) And IsNumeric(freezeCol) Then fc = CLng(freezeCol)
+    If Not IsEmpty(freezeRow) And Not IsNull(freezeRow) And isNumeric(freezeRow) Then fr = CLng(freezeRow)
+    If Not IsEmpty(freezeCol) And Not IsNull(freezeCol) And isNumeric(freezeCol) Then fc = CLng(freezeCol)
     If fr > 0 Or fc > 0 Then
         Dim selRow As Long, selCol As Long
         selRow = IIf(fr > 0, fr + 1, 1)
@@ -137,7 +137,7 @@ Public Sub ApplyOutlineGrouping(ByVal insertedRng As Range, ByVal groupRowsRaw A
         GroupingSkipDiagnostic ctx & ",group_rows=0", "group_rows is 0/missing-equivalent (D6 skip)."
         Exit Sub
     End If
-    If Not IsNumeric(groupRowsRaw) Then
+    If Not isNumeric(groupRowsRaw) Then
         GroupingSkipDiagnostic ctx & ",group_rows='" & rawText & "'", "invalid group_rows: non-numeric (D6 skip)."
         Exit Sub
     End If

@@ -7,7 +7,7 @@ Public Type TreportGeneral
     inputPath As String
     outputPath As String
     Delimeter As String
-    RowsCollapsed As Boolean
+    rowsCollapsed As Boolean
 End Type
 
 Public Type TreportReport
@@ -47,7 +47,7 @@ End Type
 
 Public Function Norm(ByVal v As Variant) As String
     On Error Resume Next
-    If isError(v) Or IsNull(v) Or IsEmpty(v) Then
+    If IsError(v) Or IsNull(v) Or IsEmpty(v) Then
         Norm = vbNullString
     Else
         Norm = Trim$(CStr(v))
@@ -136,7 +136,7 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
 
     n = RowCountSafe(loG)
     If n = 0 Then Fail 2103, "config/general", "ListObject 'general' has no data rows."
-    cfg.General.RowsCollapsed = False
+    cfg.General.rowsCollapsed = False
     For i = 1 To n
         pName = Norm(loG.DataBodyRange.Cells(i, ColIndex(loG, "parameter")).value)
         pValRaw = loG.DataBodyRange.Cells(i, ColIndex(loG, "value")).value
@@ -147,17 +147,17 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
             Case "delimeter": cfg.General.Delimeter = pVal
             Case "rows_collapsed"
                 If IsEmpty(pValRaw) Or IsNull(pValRaw) Then
-                    cfg.General.RowsCollapsed = False
+                    cfg.General.rowsCollapsed = False
                 ElseIf VarType(pValRaw) = vbBoolean Then
-                    cfg.General.RowsCollapsed = CBool(pValRaw)
+                    cfg.General.rowsCollapsed = CBool(pValRaw)
                 ElseIf Len(pVal) = 0 Then
-                    cfg.General.RowsCollapsed = False
+                    cfg.General.rowsCollapsed = False
                 Else
                     Select Case LCase$(pVal)
                         Case "false", "0", "no"
-                            cfg.General.RowsCollapsed = False
+                            cfg.General.rowsCollapsed = False
                         Case "true", "1", "yes"
-                            cfg.General.RowsCollapsed = True
+                            cfg.General.rowsCollapsed = True
                         Case Else
                             Fail 2107, "config/general", "parameter 'rows_collapsed' has invalid value '" & CStr(pValRaw) & "' (row=" & i & ", section='general'); expected blank, False/0/No, or True/1/Yes."
                     End Select
