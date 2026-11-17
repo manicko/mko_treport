@@ -54,12 +54,15 @@ Rows define source data and sheet/output processing in order.
 | `data_sheet` | Sheet containing the source pivot/data context. | Required, non-empty. |
 | `report_sheet` | Output sheet name template for this data file. | Required, non-empty; supports placeholder substitution. |
 | `filters` | Filter DSL applied at data-file scope. | Required, non-empty (may contain clauses per DSL). |
-| `paste_row` | Target row for snapshot paste/layout. | Layout input; defaults may apply in implementation. |
+| `paste_row` | Target row for snapshot paste/layout. | Layout input; defaults may apply in implementation. Final first row of inserted data after all operations (including `insert_rows` helper-row lifecycle). |
 | `paste_col` | Target column for snapshot paste/layout. | Layout input; defaults may apply in implementation. |
-| `freeze_row` | Freeze panes row setting. | Optional/layout control. |
-| `freeze_col` | Freeze panes column setting. | Optional/layout control. |
-| `zoom` | Sheet zoom setting. | Optional/layout control; normalized/clamped by implementation. |
+| `freeze_row` | Freeze panes row setting. | Optional/layout control. If explicitly set by report/data-file settings, it overrides template display state for freeze panes. |
+| `freeze_col` | Freeze panes column setting. | Optional/layout control. If explicitly set, overrides template display state for freeze panes. |
+| `zoom` | Sheet zoom setting. | Optional/layout control; normalized/clamped by implementation. If explicitly set, overrides template zoom. |
 | `group_rows` | 1-based column index (relative to the copied/pasted snapshot range) used for Excel Outline row grouping. | Optional. If missing/blank/`0`, non-positive, non-integer, out of copied-range width, or otherwise invalid at runtime, Outline grouping is skipped for that subreport with an explicit diagnostic (no fail-fast). |
+| `template` | Worksheet template name in macro workbook (`ThisWorkbook`, `treport.xlsm`) used as target-sheet source. | Optional (P04). Absent column or blank/empty => ordinary plain sheet creation (current default behavior). If set: Worksheet only (not chart), case-insensitive lookup in `ThisWorkbook` (visible/hidden/very hidden allowed), fresh copy per subreport use into output workbook, source template never modified, copied sheet renamed to final `data_sheet` and made visible. Missing/unusable template, copy/rename failure, or name conflict fails fast with contextual diagnostics. |
+| `only_values` | Controls snapshot transfer mode. | Optional boolean (P04). Default `False` (absent column/blank/`FALSE`/`0`/`NO`) = existing standard transfer (values/number formats, formats, column widths, row heights). `True` (`TRUE`/`1`/`YES`, trimmed case-insensitive) = strict values only into target range (no source formatting/number formats/widths/heights); target/template formatting is preserved. Non-empty unknown value fails config validation. |
+| `insert_rows` | Controls row-preparation/helper-row lifecycle around insertion. | Optional boolean (P04). Default `False` = no row add/delete, insert at `paste_row`. `True` = use actual snapshot height `H` (`snapshot.Rows.Count`): add `H` rows at `P+1`, temporarily insert at `P+1..P+H`, delete helper row `P+H+1` then `P`, final inserted data at `P..P+H-1`; final range recomputed before formatting/grouping. Boundary `paste_row=1` allowed (expendable whole helper rows). Prep/insert/delete errors fail fast. |
 
 ### `placeholders` (derived at runtime)
 
@@ -77,9 +80,10 @@ Implemented/expected behavior at a high level (see `modTreportConfig`, `modTrepo
 - **Required structures**: `settings` sheet and required ListObjects/columns must exist; missing/invalid structures fail fast with contextual errors.
 - **Required values**: key fields in `general`, `reports`, and `data_files` must be non-empty after normalization.
 - **Normalization**: `Norm` trims and normalizes null/empty/error-like inputs.
+- **Optional P04 boolean/string fields**: `template`, `only_values`, `insert_rows` are optional in `data_files` (backward compatible when columns are absent). Absent column or blank/empty/null values use defaults (`template` empty, booleans `False`). Accepted boolean tokens (trimmed, case-insensitive): `TRUE` = `TRUE`/`1`/`YES` or Excel Boolean `True`; `FALSE` = `FALSE`/`0`/`NO` or Excel Boolean `False`. Non-empty unknown/error values fail config validation with contextual diagnostics (row/data_file/data_sheet/parameter/raw value/expectation). No `height`/`width` config columns are required (snapshot size is runtime-derived).
 - **Path handling**: input/output paths are normalized/validated; output readiness checks are enforced.
 - **Naming rules**: report/file and sheet names are sanitized and constrained (including Excel sheet name length considerations) with collision checks.
-- **Fail-fast collisions**: naming/sheet collisions are treated as errors (scope and exact behavior described in [Pipeline and data flow](./pipeline-and-dataflow.md)); successful-run evidence may be blocked by dataset/config collisions.
+- **Fail-fast collisions**: naming/sheet collisions are treated as errors (scope and exact behavior described in [Pipeline and data flow](./pipeline-and-dataflow.md)); successful-run evidence may be blocked by dataset/config collisions. For P04 target preparation, existing target sheet name conflicts in the output workbook fail fast (no overwrite/delete) with contextual diagnostics.
 
 ## Placeholders and Substitution
 
