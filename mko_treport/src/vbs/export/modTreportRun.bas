@@ -1,4 +1,4 @@
-﻿Attribute VB_Name = "modTreportRun"
+Attribute VB_Name = "modTreportRun"
 Option Explicit
 
 ' treport rev.6 run entry points (FR-RUN-1)
