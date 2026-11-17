@@ -113,10 +113,18 @@ Public Sub Create_report()
         Set wbSrc = Nothing
     Next i
 
-    ' save outputs
+    ' save outputs (B1/CR-1,D3): cleanup unproduced default sheets on successful normal-completion path only,
+    ' with produced-sheet guards and pre/post invariants before save.
     For r = LBound(cfg.Reports) To UBound(cfg.Reports)
-        ctx = "Create_report/save[name='" & outNames(r) & "']"
-        modTreportOutput.SaveOutputWorkbook outBooks(r), outputFolder, outNames(r), ctx
+        ctx = "Create_report/save[name='" & outNames(r) & "',report_row=" & cfg.Reports(r).RowIndex & "]"
+        If Not outBooks(r) Is Nothing Then
+            If outUsedSheetNames(r) Is Nothing Or outUsedSheetNames(r).Count = 0 Then
+                modTreportConfig.Fail 2630, ctx, "Output finalization failed: no produced report/content sheets recorded for output workbook; refusing to save invalid workbook."
+            End If
+            modTreportOutput.CleanupDefaultSheets outBooks(r), outUsedSheetNames(r), ctx & "/cleanup"
+            modTreportOutput.EnsureProducedSheetsPresent outBooks(r), outUsedSheetNames(r), ctx & "/verify"
+            modTreportOutput.SaveOutputWorkbook outBooks(r), outputFolder, outNames(r), ctx
+        End If
         Set outBooks(r) = Nothing
     Next r
 

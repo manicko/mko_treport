@@ -211,16 +211,90 @@ EH:
     modTreportConfig.Fail 2610, ctx & ",sheet='" & sheetName & "'", "Unable to create report sheet: " & Err.Description
 End Function
 
-Public Sub CleanupDefaultSheets(ByVal outWb As Workbook)
+Public Sub CleanupDefaultSheets(ByVal outWb As Workbook, ByVal producedSheetNames As Object, ByVal ctx As String)
+    ' Workbook-scoped cleanup for B1/CR-1: remove only unproduced worksheets from wb.Worksheets
+    ' on successful normal-completion path before save. Never delete produced report sheets.
+    ' producedSheetNames keys are LCase$(Trim$(sheetName)) of final produced sheet names.
+    Dim i As Long
     Dim ws As Worksheet
-    On Error Resume Next
+    Dim wsKey As String
+    Dim prevAlerts As Boolean
+    Dim errNum As Long
+    Dim errDesc As String
+    Dim errSrc As String
+
+    If outWb Is Nothing Then
+        modTreportConfig.Fail 2620, ctx, "Default-sheet cleanup failed: output workbook is Nothing."
+    End If
+    If producedSheetNames Is Nothing Then
+        modTreportConfig.Fail 2621, ctx, "Default-sheet cleanup failed: produced sheet registry is Nothing."
+    End If
+    If producedSheetNames.Count = 0 Then
+        modTreportConfig.Fail 2622, ctx, "Default-sheet cleanup failed: produced sheet registry is empty (no report/content sheets to keep)."
+    End If
+
+    prevAlerts = Application.DisplayAlerts
+    On Error GoTo EH
     Application.DisplayAlerts = False
-    For Each ws In outWb.Worksheets
-        If outWb.Worksheets.Count <= 1 Then Exit For
-        If Left$(ws.Name, 5) = "Sheet" Or ws.Name = "Лист1" Then
-            ' delete only if empty-ish and not a named report target; safer to leave alone to avoid deleting real sheets
+
+    For i = outWb.Worksheets.Count To 1 Step -1
+        Set ws = outWb.Worksheets(i)
+        wsKey = LCase$(Trim$(ws.Name))
+        If Not producedSheetNames.Exists(wsKey) Then
+            If outWb.Worksheets.Count <= 1 Then
+                modTreportConfig.Fail 2623, ctx & ",sheet='" & ws.Name & "'", "Default-sheet cleanup cannot remove unproduced sheet because workbook must retain at least one worksheet."
+            End If
+            ws.Delete
         End If
-    Next ws
-    Application.DisplayAlerts = True
+        Set ws = Nothing
+    Next i
+
+    Application.DisplayAlerts = prevAlerts
     On Error GoTo 0
+    Exit Sub
+EH:
+    errNum = Err.Number
+    errDesc = Err.Description
+    errSrc = Err.Source
+    On Error Resume Next
+    Application.DisplayAlerts = prevAlerts
+    On Error GoTo 0
+    modTreportConfig.Fail 2624, ctx & ",source='" & errSrc & "',error=" & CStr(errNum), "Default-sheet cleanup failed: " & errDesc
+End Sub
+
+Public Sub EnsureProducedSheetsPresent(ByVal outWb As Workbook, ByVal producedSheetNames As Object, ByVal ctx As String)
+    ' Post-cleanup invariant (B1): intended produced sheets must remain present before save.
+    Dim k As Variant
+    Dim ws As Worksheet
+    Dim found As Boolean
+    Dim i As Long
+    Dim targetKey As String
+
+    If outWb Is Nothing Then
+        modTreportConfig.Fail 2625, ctx, "Output workbook invalid before save: workbook is Nothing."
+    End If
+    If producedSheetNames Is Nothing Then
+        modTreportConfig.Fail 2626, ctx, "Output workbook invalid before save: produced sheet registry is Nothing."
+    End If
+    If producedSheetNames.Count = 0 Then
+        modTreportConfig.Fail 2627, ctx, "Output workbook invalid before save: produced sheet registry is empty."
+    End If
+    If outWb.Worksheets.Count <= 0 Then
+        modTreportConfig.Fail 2628, ctx, "Output workbook invalid before save: no worksheets remain."
+    End If
+
+    For Each k In producedSheetNames.Keys
+        targetKey = CStr(k)
+        found = False
+        For i = 1 To outWb.Worksheets.Count
+            Set ws = outWb.Worksheets(i)
+            If LCase$(Trim$(ws.Name)) = targetKey Then
+                found = True
+                Exit For
+            End If
+        Next i
+        If Not found Then
+            modTreportConfig.Fail 2629, ctx & ",sheet_key='" & targetKey & "'", "Output workbook invalid before save: intended produced sheet not present after cleanup."
+        End If
+    Next k
 End Sub
