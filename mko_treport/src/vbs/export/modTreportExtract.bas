@@ -14,12 +14,14 @@ Public Function GetPresentedRange(ByVal pt As PivotTable, ByVal ctx As String) A
 End Function
 
 Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Worksheet, ByVal pasteRow As Long, ByVal pasteCol As Long, ByVal ctx As String, Optional ByVal onlyValues As Boolean = False, Optional ByVal insertRows As Boolean = False) As Range
+    ' P05 (GA-P05-1..7): insert_rows=TRUE uses row P=paste_row as sample/template row.
+    ' Sequence: copy entire row P and insert H-1 copies starting at P (H=snapshot.Rows.Count),
+    ' then write snapshot at (P,paste_col). No helper rows/deletion. Final data P..P+H-1.
     Dim srcRg As Range
     Dim dstCell As Range
     Dim pr As Long, pc As Long
-    Dim i As Long
     Dim h As Long, w As Long
-    Dim insertAtRow As Long
+    Dim i As Long
 
     pr = pasteRow
     pc = pasteCol
@@ -37,36 +39,32 @@ Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Work
     h = srcRg.Rows.Count
     w = srcRg.Columns.Count
     If h <= 0 Or w <= 0 Then
-        modTreportConfig.Fail 2704, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows'", _
+        modTreportConfig.Fail 2704, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues), _
             "Invalid snapshot size for insertion (rows=" & CStr(h) & ",cols=" & CStr(w) & ")."
     End If
 
-    If insertRows Then
-        insertAtRow = pr + 1
+    If insertRows And h > 1 Then
         On Error GoTo EHRowPrep
-        dstWs.Rows(insertAtRow & ":" & (insertAtRow + h - 1)).Insert Shift:=xlDown
+        ' Duplicate sample row P (entire row) H-1 times starting at P; original P shifts down.
+        dstWs.Rows(pr).Copy
+        dstWs.Rows(pr).Resize(h - 1).Insert Shift:=xlDown
+        Application.CutCopyMode = False
         On Error GoTo EH
-        Set dstCell = dstWs.Cells(insertAtRow, pc)
-    Else
-        Set dstCell = dstWs.Cells(pr, pc)
     End If
 
+    Set dstCell = dstWs.Cells(pr, pc)
     PasteSnapshotData srcRg, dstWs, dstCell, onlyValues, ctx
 
-    If insertRows Then
-        DeleteInsertRowsHelpers dstWs, pr, h, ctx
-        Set CopyPivotSnapshot = dstWs.Range(dstWs.Cells(pr, pc), dstWs.Cells(pr + h - 1, pc + w - 1))
-    Else
-        Set CopyPivotSnapshot = dstWs.Range(dstCell, dstCell.Offset(h - 1, w - 1))
-    End If
+    Set CopyPivotSnapshot = dstWs.Range(dstWs.Cells(pr, pc), dstWs.Cells(pr + h - 1, pc + w - 1))
     Exit Function
 
 EHRowPrep:
-    modTreportConfig.Fail 2705, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",rows=" & CStr(h), _
-        "Failed to prepare/insert rows for snapshot insertion: " & Err.Description
+    Application.CutCopyMode = False
+    modTreportConfig.Fail 2705, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",operation='copy/insert sample row'", _
+        "Failed to prepare/insert rows for snapshot insertion (sample row copy): " & Err.Description
 EH:
     Application.CutCopyMode = False
-    modTreportConfig.Fail 2702, ctx & ",data_sheet='" & dstWs.Name & "',parameter='only_values/insert_rows'", _
+    modTreportConfig.Fail 2702, ctx & ",data_sheet='" & dstWs.Name & "',parameter='only_values/insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues), _
         "Failed to copy/paste pivot snapshot: " & Err.Description
 End Function
 
@@ -104,27 +102,7 @@ EH:
     Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
 
-Public Sub DeleteInsertRowsHelpers(ByVal dstWs As Worksheet, ByVal pasteRowFinal As Long, ByVal snapshotRows As Long, ByVal ctx As String)
-    ' GA-3/CR-4: after temporary insert at P+1..P+H, delete helper row below (P+H+1) then above (P).
-    ' Separate callable function; operates on provided target sheet/range parameters.
-    Dim p As Long, h As Long
-    p = pasteRowFinal
-    h = snapshotRows
-    If p <= 0 Then p = 1
-    If h <= 0 Then
-        modTreportConfig.Fail 2706, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(p), _
-            "Invalid snapshot height for helper-row deletion."
-    End If
-
-    On Error GoTo EH
-    dstWs.Rows(p + h + 1).Delete Shift:=xlUp
-    dstWs.Rows(p).Delete Shift:=xlUp
-    Exit Sub
-
-EH:
-    modTreportConfig.Fail 2707, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(p) & ",rows=" & CStr(h), _
-        "Failed to delete helper rows for insert_rows: " & Err.Description
-End Sub
+' P05 (GA-P05-7): helper-row deletion removed; insert_rows=TRUE now uses sample row P duplicated H-1 times with no helper rows.
 
 Public Sub ApplySheetFormatting(ByVal ws As Worksheet, ByVal freezeRow As Variant, ByVal freezeCol As Variant, ByVal zoomVal As Variant, ByVal ctx As String, Optional ByVal preserveTargetSettings As Boolean = False)
     Dim hasZoom As Boolean
@@ -324,6 +302,8 @@ GroupingComFail:
     modTreportConfig.Fail 2703, ctx & ",group_rows=" & CStr(groupColRel) & ",abs_col=" & CStr(absCol) & ",rows_collapsed=" & CStr(rowsCollapsed), _
         "Outline grouping failed after validation: " & Err.Description
 End Sub
+
+
 
 
 
