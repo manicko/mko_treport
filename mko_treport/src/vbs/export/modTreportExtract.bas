@@ -175,16 +175,24 @@ Public Sub ApplyOutlineGrouping(ByVal insertedRng As Range, ByVal groupRowsRaw A
     startRow = 0
     For r = 1 To insRows
         Set cellInterior = insertedRng.Cells(r, groupColRel).Interior
-        ' Groupable (P01 D5 + compatibility): no fill, explicit solid white, or system/automatic background
-        ' treated as white/no-fill for outline grouping (e.g. indexed/system background colors).
-        isGroupableFill = (cellInterior.Pattern = xlNone)
-        If Not isGroupableFill And cellInterior.Pattern = xlSolid Then
+        ' Groupable (P01 D5 + compatibility): no fill/pattern-none, or effectively white/system background.
+        ' Static Interior only (conditional formatting ignored). Covers explicit white and common
+        ' system/automatic/indexed representations (e.g. solid fg indexed 65 in OOXML snapshots).
+        isGroupableFill = False
+        If cellInterior.Pattern = xlNone Then
+            isGroupableFill = True
+        ElseIf cellInterior.Pattern = xlSolid Then
+            On Error Resume Next
             If CLng(cellInterior.Color) = RGB(255, 255, 255) Then
                 isGroupableFill = True
-            ElseIf CLng(cellInterior.ColorIndex) = 2 Or CLng(cellInterior.ColorIndex) = -4142 Or CLng(cellInterior.ColorIndex) = -4105 Then
-                ' xlColorIndexWhite (2), xlColorIndexNone (-4142), xlAutomatic (-4105)
-                isGroupableFill = True
+            Else
+                Select Case CLng(cellInterior.ColorIndex)
+                    Case 2, -4142, -4105
+                        ' xlColorIndexWhite (2), xlColorIndexNone (-4142), xlAutomatic (-4105)
+                        isGroupableFill = True
+                End Select
             End If
+            On Error GoTo 0
         End If
 
         If isGroupableFill Then
@@ -234,6 +242,10 @@ GroupingComFail:
     modTreportConfig.Fail 2703, ctx & ",group_rows=" & CStr(groupColRel) & ",abs_col=" & CStr(absCol) & ",rows_collapsed=" & CStr(rowsCollapsed), _
         "Outline grouping failed after validation: " & Err.Description
 End Sub
+
+
+
+
 
 
 
