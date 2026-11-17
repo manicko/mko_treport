@@ -1,4 +1,4 @@
-Attribute VB_Name = "modTreportRun"
+﻿Attribute VB_Name = "modTreportRun"
 Option Explicit
 
 ' treport rev.6 run entry points (FR-RUN-1)
@@ -164,9 +164,9 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
     Set ws = modTreportPivot.GetDataSheet(wbSrc, cfg.DataFiles(dfIdx).DataSheet, fileCtx & ",path='" & srcPath & "'")
     Set pt = modTreportPivot.GetPrimaryPivot(ws, fileCtx & ",path='" & srcPath & "'")
 
-    ' B3/D11 (rev.7): resolve report_sheet <max_<field>> values once per data_files row from the
-    ' row pivot/data context (available numeric-convertible field items) BEFORE applying any
-    ' data_files.filters or per-report filters, independent of filter clause derivation/representatives.
+    ' B3/D1/D2/D7/D11 (rev.7): resolve report_sheet <max_<field>> and <max-N_<field>> values once per
+    ' data_files row from the row pivot/data context (available numeric-convertible field items) BEFORE applying
+    ' any data_files.filters or per-report filters, independent of filter clause derivation/representatives.
     Set placeholderMaxValues = ResolveReportSheetPlaceholderMaxValues(pt, cfg.DataFiles(dfIdx).ReportSheet, fileCtx)
 
     pf = modTreportFilters.ParseAndClassify(cfg.DataFiles(dfIdx).Filters, cfg.General.Delimeter, fileCtx)
@@ -211,32 +211,85 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
 End Sub
 
 Private Function ResolveReportSheetPlaceholderMaxValues(ByVal pt As PivotTable, ByVal reportSheetTemplate As String, ByVal ctx As String) As Object
-    ' Computes row-scoped <max_<field>> values for a data_files row template.
+    ' Computes row-scoped <max_<field>> / <max-N_<field>> values for a data_files row template.
     ' Resolution point: after primary PivotTable is available, before data_files.filters apply.
     ' Source: available numeric-convertible item values of the named PivotTable field in that pivot
-    ' context (field-level domain via PivotFields/PivotItems enumeration), not filter representatives
-    ' and not selected-subset results.
+    ' context (field-level domain via PivotItems enumeration + TryParseNumericConvertible parity),
+    ' not filter representatives and not selected-subset results. D1/D2 enforced fail-fast.
     Dim resolved As Object
-    Dim fields As Object
+    Dim units As Object
+    Dim fieldMaxCache As Object
     Dim k As Variant
+    Dim unit As Object
     Dim fieldName As String
-    Dim maxVal As Variant
+    Dim nOffset As Long
+    Dim maxVal As Double
+    Dim computedVal As Double
+    Dim hasMember As Boolean
+    Dim unitCtx As String
+    Dim tokenExample As String
+    Dim tokenMap As Object
+    Dim valKey As String
     Dim maxText As String
+    Dim cacheKey As String
+    Dim cacheItem As Object
 
     Set resolved = CreateObject("Scripting.Dictionary")
     resolved.CompareMode = vbBinaryCompare
-    Set fields = modTreportOutput.CollectMaxPlaceholderFields(reportSheetTemplate, ctx & ",report_sheet='" & reportSheetTemplate & "'")
+    Set fieldMaxCache = CreateObject("Scripting.Dictionary")
+    fieldMaxCache.CompareMode = vbBinaryCompare
 
-    If Not fields Is Nothing Then
-        For Each k In fields.Keys
-            fieldName = CStr(k)
-            maxVal = modTreportPivot.GetPivotFieldNumericMaxValue(pt, fieldName, ctx & ",report_sheet='" & reportSheetTemplate & "',field='" & fieldName & "'")
-            maxText = CStr(maxVal)
-            If Not resolved.Exists(fieldName) Then
-                resolved.Add fieldName, maxText
-            End If
-        Next k
-    End If
+    Set units = modTreportOutput.CollectMaxPlaceholderUnits(reportSheetTemplate, ctx & ",report_sheet='" & reportSheetTemplate & "'")
+
+    For Each k In units.Keys
+        Set unit = units(k)
+        fieldName = CStr(unit("Field"))
+        nOffset = CLng(unit("N"))
+        Set tokenMap = unit("Tokens")
+        tokenExample = vbNullString
+        If tokenMap.Count > 0 Then
+            Dim tk As Variant
+            For Each tk In tokenMap.Keys
+                tokenExample = CStr(tk)
+                Exit For
+            Next tk
+        End If
+        unitCtx = ctx & ",report_sheet='" & reportSheetTemplate & "',template='" & reportSheetTemplate & "',field='" & fieldName & "',N=" & CStr(nOffset) & ",token='" & tokenExample & "'"
+
+        cacheKey = fieldName
+        If Not fieldMaxCache.Exists(cacheKey) Then
+            computedVal = 0#
+            hasMember = modTreportPivot.GetPivotFieldNumericMaxAndContains(pt, fieldName, unitCtx, maxVal, 0#)
+            Set cacheItem = CreateObject("Scripting.Dictionary")
+            cacheItem.Add "Max", maxVal
+            fieldMaxCache.Add cacheKey, cacheItem
+        Else
+            Set cacheItem = fieldMaxCache(cacheKey)
+            maxVal = CDbl(cacheItem("Max"))
+        End If
+
+        If nOffset < 0 Then
+            modTreportConfig.Fail 2631, unitCtx & ",resolved_max=" & CStr(maxVal), "Invalid <max-N_...> placeholder: N must be >= 0."
+        End If
+        If CDbl(nOffset) >= maxVal Then
+            modTreportConfig.Fail 2632, unitCtx & ",resolved_max=" & CStr(maxVal), "Invalid <max-N_...> placeholder: N must satisfy 0 <= N < max_value (resolved max=" & CStr(maxVal) & ", N=" & CStr(nOffset) & ")."
+        End If
+
+        computedVal = maxVal - CDbl(nOffset)
+        hasMember = modTreportPivot.GetPivotFieldNumericMaxAndContains(pt, fieldName, unitCtx, maxVal, computedVal)
+        If Not hasMember Then
+            modTreportConfig.Fail 2633, unitCtx & ",resolved_max=" & CStr(maxVal) & ",computed=" & CStr(computedVal), "Computed <max-N_...> placeholder value is not present in pre-filter field numeric item domain (exact equality)."
+        End If
+
+        If computedVal = Fix(computedVal) Then
+            maxText = CStr(CLng(computedVal))
+        Else
+            maxText = CStr(computedVal)
+        End If
+
+        valKey = modTreportOutput.MakeMaxPlaceholderUnitKey(fieldName, nOffset)
+        If Not resolved.Exists(valKey) Then resolved.Add valKey, maxText
+    Next k
 
     Set ResolveReportSheetPlaceholderMaxValues = resolved
 End Function

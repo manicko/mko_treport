@@ -1,10 +1,13 @@
 Attribute VB_Name = "modTreportPivot"
 Option Explicit
 
-' B3/D11 (rev.7): max_<field> extraction enumerates named field available items via
+' B3/D11 (rev.7): max_<field> and max-N_<field> extraction enumerates named field available items via
 ' PivotTable.PivotFields(fieldName).PivotItems in the row pivot/data context.
 ' Numeric-convertible detection is deterministic (Trim + sign/digit/decimal-sep parse) and
 ' independent of data_files.filters application/selection/representatives.
+' D1/D2 (B3): N>=0, 0<=N<max_value, N==0==max; N>=max_value or computed value absent from
+' pre-filter numeric-convertible field item domain (exact CDbl equality, PivotItems+TryParseNumericConvertible
+' parity) => fail fast by callers with clear context.
 
 Public Function GetDataSheet(ByVal wb As Workbook, ByVal sheetName As String, ByVal ctx As String) As Worksheet
     Dim ws As Worksheet
@@ -89,21 +92,20 @@ EH:
     outNum = 0#
 End Function
 
-Public Function GetPivotFieldNumericMaxValue(ByVal pt As PivotTable, ByVal fieldName As String, ByVal ctx As String) As Variant
-    ' Deterministic maximum numeric value over all available numeric-convertible items of the named
-    ' PivotTable field in the relevant pivot/data context for the processed data_files row.
-    ' Enumeration source: PivotField.PivotItems(item).Name from PivotFields(fieldName) (pre-filter,
-    ' independent of filter clause derivation/representatives and selected-subset results).
+Private Sub CollectPivotFieldNumericDomain(ByVal pt As PivotTable, ByVal fieldName As String, ByVal ctx As String, ByRef outHasNum As Boolean, ByRef outMaxVal As Double, ByRef outDomain As Object)
+    ' Single pre-filter enumeration of PivotItems.Name with TryParseNumericConvertible parity.
+    ' outDomain keys are CStr(CDbl(numVal)) for exact numeric membership checks (CDbl equality semantics).
     Dim pf As PivotField
     Dim i As Long
     Dim itemName As String
     Dim numVal As Double
-    Dim hasNum As Boolean
-    Dim maxVal As Double
+    Dim key As String
 
     Set pf = GetPivotFieldRequired(pt, fieldName, ctx)
-    hasNum = False
-    maxVal = 0#
+    Set outDomain = CreateObject("Scripting.Dictionary")
+    outDomain.CompareMode = vbBinaryCompare
+    outHasNum = False
+    outMaxVal = 0#
 
     On Error Resume Next
     For i = 1 To pf.PivotItems.Count
@@ -113,19 +115,33 @@ Public Function GetPivotFieldNumericMaxValue(ByVal pt As PivotTable, ByVal field
             GoTo NextItem
         End If
         If TryParseNumericConvertible(itemName, numVal) Then
-            If Not hasNum Or numVal > maxVal Then
-                maxVal = numVal
-                hasNum = True
+            If Not outHasNum Or numVal > outMaxVal Then
+                outMaxVal = numVal
+                outHasNum = True
             End If
+            key = CStr(CDbl(numVal))
+            If Not outDomain.Exists(key) Then outDomain.Add key, True
         End If
 NextItem:
         Err.Clear
     Next i
     On Error GoTo 0
 
-    If Not hasNum Then
+    If Not outHasNum Then
         modTreportConfig.Fail 2619, ctx & ",field='" & fieldName & "'", "Cannot determine max_<" & fieldName & ">: no numeric-convertible values available for referenced PivotTable field in pivot context."
     End If
+End Sub
+
+Public Function GetPivotFieldNumericMaxValue(ByVal pt As PivotTable, ByVal fieldName As String, ByVal ctx As String) As Variant
+    ' Deterministic maximum numeric value over all available numeric-convertible items of the named
+    ' PivotTable field in the relevant pivot/data context for the processed data_files row.
+    ' Enumeration source: PivotField.PivotItems(item).Name from PivotFields(fieldName) (pre-filter,
+    ' independent of filter clause derivation/representatives and selected-subset results).
+    Dim hasNum As Boolean
+    Dim maxVal As Double
+    Dim domain As Object
+
+    CollectPivotFieldNumericDomain pt, fieldName, ctx, hasNum, maxVal, domain
 
     ' Return numeric value without forced zero-padding (D11).
     If maxVal = Fix(maxVal) Then
@@ -133,6 +149,18 @@ NextItem:
     Else
         GetPivotFieldNumericMaxValue = maxVal
     End If
+End Function
+
+Public Function GetPivotFieldNumericMaxAndContains(ByVal pt As PivotTable, ByVal fieldName As String, ByVal ctx As String, ByRef outMaxVal As Double, ByVal testValue As Double) As Boolean
+    ' B3: pre-filter field max and exact domain membership over same PivotItems+TryParseNumericConvertible
+    ' enumeration. Membership uses exact CDbl equality semantics via normalized numeric key.
+    Dim hasNum As Boolean
+    Dim domain As Object
+    Dim key As String
+
+    CollectPivotFieldNumericDomain pt, fieldName, ctx, hasNum, outMaxVal, domain
+    key = CStr(CDbl(testValue))
+    GetPivotFieldNumericMaxAndContains = domain.Exists(key)
 End Function
 
 Private Function GetPivotFieldOrientation(ByVal pf As PivotField) As Long

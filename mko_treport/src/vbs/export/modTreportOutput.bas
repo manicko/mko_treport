@@ -1,9 +1,10 @@
 Attribute VB_Name = "modTreportOutput"
 Option Explicit
 
-' treport rev.7 - output/report assembly helpers (B9,B10,B11,D11/D12/D14)
-' report_sheet placeholders: <max_<PivotTable field name>> resolved per data_files row
-' from the row pivot/data context, independent of data_files.filters derivation/representatives.
+' treport rev.7 - output/report assembly helpers (B9,B10,B11,B3,D1/D2/D7/D11/D12/D14)
+' report_sheet placeholders: <max_<PivotTable field name>> and <max-N_<PivotTable field name>>
+' resolved per data_files row from the row pivot/data context, independent of data_files.filters
+' derivation/representatives. Grammar-aware, exact-token substitution, legacy/malformed/remnant fail-fast.
 
 Public Function SanitizeSheetName(ByVal nameIn As String, ByVal ctx As String) As String
     Dim s As String, i As Long, ch As String, bad As String
@@ -41,21 +42,123 @@ Public Sub EnsureNoSheetNameCollision(ByVal wb As Workbook, ByVal sheetName As S
     End If
 End Sub
 
-Public Function CollectMaxPlaceholderFields(ByVal template As String, ByVal ctx As String) As Object
-    ' Returns Scripting.Dictionary of unique PivotTable field names referenced by well-formed
-    ' <max_<field>> tokens in template (key = field name as token inner text; value = True).
-    ' RC3: fails fast on legacy fixed tokens, malformed/unclosed/empty-field <max_... tokens,
-    ' and any other unresolved placeholder-like tokens in template.
-    Dim fields As Object
+Private Function IsAsciiDigit(ByVal ch As String) As Boolean
+    IsAsciiDigit = (Len(ch) = 1 And ch >= "0" And ch <= "9")
+End Function
+
+Private Function IsAllAsciiDigits(ByVal s As String) As Boolean
+    Dim i As Long
+    Dim ch As String
+    If Len(s) = 0 Then
+        IsAllAsciiDigits = False
+        Exit Function
+    End If
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If Not IsAsciiDigit(ch) Then
+            IsAllAsciiDigits = False
+            Exit Function
+        End If
+    Next i
+    IsAllAsciiDigits = True
+End Function
+
+Private Function TryParseMaxPlaceholderToken(ByVal tokenText As String, ByRef outFieldName As String, ByRef outN As Long, ByRef outIsOffset As Boolean) As Boolean
+    ' Grammar-aware parse for <max_<field>> and <max<ws>?-<ws>?N<ws>?_<field>>.
+    ' max is case-insensitive; N is base-10 [0-9]+, non-negative, no sign/decimal.
+    ' Field is exact text between '_' and closing '>' (may include spaces/special chars).
+    Dim inner As String
+    Dim lowerInner As String
+    Dim usPos As Long
+    Dim head As String
+    Dim fieldPart As String
+    Dim i As Long
+    Dim rest As String
+    Dim nStr As String
+
+    TryParseMaxPlaceholderToken = False
+    outFieldName = vbNullString
+    outN = 0
+    outIsOffset = False
+
+    If Len(tokenText) < 7 Then Exit Function
+    If Left$(tokenText, 1) <> "<" Or Right$(tokenText, 1) <> ">" Then Exit Function
+    inner = Mid$(tokenText, 2, Len(tokenText) - 2)
+    lowerInner = LCase$(inner)
+    If Left$(lowerInner, 3) <> "max" Then Exit Function
+    usPos = InStr(1, inner, "_", vbBinaryCompare)
+    If usPos <= 0 Then Exit Function
+
+    head = Mid$(inner, 1, usPos - 1)
+    fieldPart = Mid$(inner, usPos + 1)
+    If Len(fieldPart) = 0 Then Exit Function
+
+    If LCase$(head) = "max" Then
+        outFieldName = fieldPart
+        outN = 0
+        outIsOffset = False
+        TryParseMaxPlaceholderToken = True
+        Exit Function
+    End If
+
+    ' Offset form: max<ws>?-<ws>?N<ws>?
+    If Len(head) < 5 Then Exit Function ' max-0
+    If LCase$(Left$(head, 3)) <> "max" Then Exit Function
+    i = 4
+    Do While i <= Len(head) And Mid$(head, i, 1) = " "
+        i = i + 1
+    Loop
+    If i > Len(head) Then Exit Function
+    If Mid$(head, i, 1) <> "-" Then Exit Function
+    i = i + 1
+    Do While i <= Len(head) And Mid$(head, i, 1) = " "
+        i = i + 1
+    Loop
+    If i > Len(head) Then Exit Function
+    rest = Mid$(head, i)
+    ' strip trailing whitespace from N
+    Do While Len(rest) > 0 And Right$(rest, 1) = " "
+        rest = Left$(rest, Len(rest) - 1)
+    Loop
+    nStr = rest
+    If Not IsAllAsciiDigits(nStr) Then Exit Function
+
+    outFieldName = fieldPart
+    outN = CLng(Val(nStr))
+    outIsOffset = True
+    TryParseMaxPlaceholderToken = True
+End Function
+
+Public Function MakeMaxPlaceholderUnitKey(ByVal fieldName As String, ByVal nOffset As Long) As String
+    MakeMaxPlaceholderUnitKey = fieldName & vbNullChar & CStr(nOffset)
+End Function
+
+Private Function FailMalformedMaxToken(ByVal ctx As String, ByVal template As String, ByVal tokenText As String, ByVal reason As String) As Object
+    modTreportConfig.Fail 2614, ctx & ",template='" & template & "',token='" & tokenText & "'", reason
+    Set FailMalformedMaxToken = Nothing
+End Function
+
+Public Function CollectMaxPlaceholderUnits(ByVal template As String, ByVal ctx As String) As Object
+    ' Returns dictionary keyed by (field & vbNullChar & N). Item is dictionary with:
+    ' Field (String), N (Long), Tokens (Dictionary of exact token strings -> True), IsOffset (Boolean).
+    ' Grammar-aware scanning integrated with legacy/malformed/unresolved/remnant guards.
+    Dim units As Object
     Dim s As String
     Dim pos As Long
-    Dim closePos As Long
-    Dim innerName As String
+    Dim ltPos As Long
+    Dim gtPos As Long
     Dim tokenText As String
-    Dim prefixPos As Long
+    Dim inner As String
+    Dim lowerInner As String
+    Dim fieldName As String
+    Dim nOffset As Long
+    Dim isOffset As Boolean
+    Dim unitKey As String
+    Dim unit As Object
+    Dim tokenMap As Object
 
-    Set fields = CreateObject("Scripting.Dictionary")
-    fields.CompareMode = vbBinaryCompare
+    Set units = CreateObject("Scripting.Dictionary")
+    units.CompareMode = vbBinaryCompare
     s = template
 
     ' Legacy fixed placeholder tokens are non-compliant (D11/D12, rev.7 migration).
@@ -69,72 +172,121 @@ Public Function CollectMaxPlaceholderFields(ByVal template As String, ByVal ctx 
         modTreportConfig.Fail 2613, ctx & ",template='" & s & "',token='<max_weeknum>'", "Legacy fixed placeholder token '<max_weeknum>' is not allowed; use '<max_<PivotTable field name>>'."
     End If
 
-    ' P-Scan: find every '<max_' and the next '>' after it.
     pos = 1
     Do
-        prefixPos = InStr(pos, s, "<max_", vbBinaryCompare)
-        If prefixPos = 0 Then Exit Do
-        closePos = InStr(prefixPos + 5, s, ">", vbBinaryCompare)
-        If closePos = 0 Then
-            modTreportConfig.Fail 2614, ctx & ",template='" & s & "',token_start=" & CStr(prefixPos), "Malformed/unclosed <max_... placeholder token (missing closing '>')."
+        ltPos = InStr(pos, s, "<", vbBinaryCompare)
+        If ltPos = 0 Then Exit Do
+        gtPos = InStr(ltPos + 1, s, ">", vbBinaryCompare)
+        If gtPos = 0 Then
+            ' Unclosed '<...': if it looks like a max placeholder start, fail as malformed max token.
+            If InStr(1, LCase$(Mid$(s, ltPos)), "<max", vbBinaryCompare) = 1 Then
+                modTreportConfig.Fail 2614, ctx & ",template='" & s & "',token_start=" & CStr(ltPos), "Malformed/unclosed <max_... placeholder token (missing closing '>')."
+            End If
+            modTreportConfig.Fail 2618, ctx & ",template='" & s & "',token_start=" & CStr(ltPos), "Unresolved placeholder-like token remains in report_sheet template."
         End If
-        tokenText = Mid$(s, prefixPos, closePos - prefixPos + 1)
-        innerName = Mid$(s, prefixPos + 5, closePos - (prefixPos + 5))
-        If Len(innerName) = 0 Then
-            modTreportConfig.Fail 2615, ctx & ",template='" & s & "',token='" & tokenText & "'", "Malformed <max_... placeholder token: empty field name."
+        tokenText = Mid$(s, ltPos, gtPos - ltPos + 1)
+        inner = Mid$(tokenText, 2, Len(tokenText) - 2)
+        lowerInner = LCase$(inner)
+
+        If Left$(lowerInner, 3) = "max" Then
+            If Not TryParseMaxPlaceholderToken(tokenText, fieldName, nOffset, isOffset) Then
+                ' Keep deterministic specific cases where possible.
+                If lowerInner = "max_" Or Left$(lowerInner, 4) = "max_" Then
+                    modTreportConfig.Fail 2615, ctx & ",template='" & s & "',token='" & tokenText & "'", "Malformed <max_... placeholder token: empty or invalid field name."
+                End If
+                modTreportConfig.Fail 2614, ctx & ",template='" & s & "',token='" & tokenText & "'", "Malformed or unresolved <max...> placeholder token."
+            End If
+
+            unitKey = MakeMaxPlaceholderUnitKey(fieldName, nOffset)
+            If units.Exists(unitKey) Then
+                Set unit = units(unitKey)
+                Set tokenMap = unit("Tokens")
+                If Not tokenMap.Exists(tokenText) Then tokenMap.Add tokenText, True
+            Else
+                Set unit = CreateObject("Scripting.Dictionary")
+                unit.CompareMode = vbBinaryCompare
+                unit.Add "Field", fieldName
+                unit.Add "N", nOffset
+                unit.Add "IsOffset", isOffset
+                Set tokenMap = CreateObject("Scripting.Dictionary")
+                tokenMap.CompareMode = vbBinaryCompare
+                tokenMap.Add tokenText, True
+                unit.Add "Tokens", tokenMap
+                units.Add unitKey, unit
+            End If
         End If
-        If Not fields.Exists(innerName) Then
-            fields.Add innerName, True
-        End If
-        pos = closePos + 1
+
+        pos = gtPos + 1
     Loop
 
-    ' Any other placeholder-like token in template is unresolved/invalid for report_sheet.
-    If InStr(1, s, "<max_", vbBinaryCompare) > 0 And fields.Count = 0 Then
-        modTreportConfig.Fail 2614, ctx & ",template='" & s & "'", "Malformed or unresolved <max_... placeholder token."
-    End If
-    ' Detect placeholder-like tokens not covered by valid <max_<field>> scanning (generic <...> forms).
-    ' Valid <max_<field>> tokens are allowed only when they will be resolved from resolvedMaxValues.
-    ' Remaining checks are finalized after substitution in SubstituteReportSheetPlaceholders.
+    Set CollectMaxPlaceholderUnits = units
+End Function
+
+Public Function CollectMaxPlaceholderFields(ByVal template As String, ByVal ctx As String) As Object
+    ' Backward-compatible field set (unique field names) derived from grammar-aware unit collection.
+    Dim fields As Object
+    Dim units As Object
+    Dim k As Variant
+    Dim unit As Object
+    Dim fieldName As String
+
+    Set fields = CreateObject("Scripting.Dictionary")
+    fields.CompareMode = vbBinaryCompare
+    Set units = CollectMaxPlaceholderUnits(template, ctx)
+
+    For Each k In units.Keys
+        Set unit = units(k)
+        fieldName = CStr(unit("Field"))
+        If Not fields.Exists(fieldName) Then fields.Add fieldName, True
+    Next k
 
     Set CollectMaxPlaceholderFields = fields
 End Function
 
 Public Function SubstituteReportSheetPlaceholders(ByVal template As String, ByVal resolvedMaxValues As Object, ByVal ctx As String) As String
-    ' Substitutes all well-formed <max_<field>> tokens using pre-resolved named-field maxima for the
-    ' processed data_files row (independent of data_files.filters). Fails fast if a referenced field
-    ' value is missing/unresolved or if any placeholder-like token remains unresolved/legacy-noncompliant.
+    ' Substitutes all well-formed <max_<field>> / <max-N_<field>> tokens using pre-resolved named-field
+    ' values for the processed data_files row (independent of data_files.filters). Exact original token
+    ' spellings are substituted; N==0 and base use same resolved value/formatting.
     Dim s As String
-    Dim fields As Object
+    Dim units As Object
     Dim k As Variant
-    Dim token As String
+    Dim unit As Object
+    Dim fieldName As String
+    Dim nOffset As Long
     Dim valKey As String
     Dim valText As String
+    Dim tokenMap As Object
+    Dim t As Variant
+    Dim tokenText As String
 
     s = template
-    Set fields = CollectMaxPlaceholderFields(s, ctx)
+    Set units = CollectMaxPlaceholderUnits(s, ctx)
 
-    If Not fields Is Nothing Then
-        For Each k In fields.Keys
-            token = "<max_" & CStr(k) & ">"
-            valKey = CStr(k)
+    For Each k In units.Keys
+        Set unit = units(k)
+        fieldName = CStr(unit("Field"))
+        nOffset = CLng(unit("N"))
+        valKey = MakeMaxPlaceholderUnitKey(fieldName, nOffset)
+        Set tokenMap = unit("Tokens")
+        For Each t In tokenMap.Keys
+            tokenText = CStr(t)
             If resolvedMaxValues Is Nothing Then
-                modTreportConfig.Fail 2616, ctx & ",template='" & template & "',field='" & valKey & "',token='" & token & "'", "Placeholder '" & token & "' cannot be resolved: no resolved max values provided."
+                modTreportConfig.Fail 2616, ctx & ",template='" & template & "',field='" & fieldName & "',N=" & CStr(nOffset) & ",token='" & tokenText & "'", "Placeholder '" & tokenText & "' cannot be resolved: no resolved max values provided."
             End If
             If Not resolvedMaxValues.Exists(valKey) Then
-                modTreportConfig.Fail 2616, ctx & ",template='" & template & "',field='" & valKey & "',token='" & token & "'", "Placeholder '" & token & "' cannot be resolved for referenced PivotTable field '" & valKey & "'."
+                modTreportConfig.Fail 2616, ctx & ",template='" & template & "',field='" & fieldName & "',N=" & CStr(nOffset) & ",token='" & tokenText & "'", "Placeholder '" & tokenText & "' cannot be resolved for referenced PivotTable field '" & fieldName & "' with N=" & CStr(nOffset) & "."
             End If
             valText = CStr(resolvedMaxValues(valKey))
-            s = Replace$(s, token, valText)
-        Next k
-    End If
+            s = Replace$(s, tokenText, valText)
+        Next t
+    Next k
 
     ' RC3: any unresolved/legacy-noncompliant or placeholder-like tokens remaining must fail fast.
     If InStr(1, s, "<max_year>", vbBinaryCompare) > 0 Or InStr(1, s, "<max_monthnum>", vbBinaryCompare) > 0 Or InStr(1, s, "<max_weeknum>", vbBinaryCompare) > 0 Then
         modTreportConfig.Fail 2613, ctx & ",template='" & template & "',result='" & s & "'", "Legacy fixed placeholder token remains unresolved/non-compliant after substitution."
     End If
-    If InStr(1, s, "<max_", vbBinaryCompare) > 0 Then
-        modTreportConfig.Fail 2617, ctx & ",template='" & template & "',result='" & s & "'", "Unresolved or malformed <max_... placeholder token remains after substitution."
+    If InStr(1, LCase$(s), "<max", vbBinaryCompare) > 0 Then
+        modTreportConfig.Fail 2617, ctx & ",template='" & template & "',result='" & s & "'", "Unresolved or malformed <max...> placeholder token remains after substitution."
     End If
     If HasUnresolvedPlaceholderLikeToken(s) Then
         modTreportConfig.Fail 2618, ctx & ",template='" & template & "',result='" & s & "'", "Unresolved placeholder-like token remains in report_sheet template."
