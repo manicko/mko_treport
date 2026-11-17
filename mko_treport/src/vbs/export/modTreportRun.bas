@@ -205,7 +205,7 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
         If pc <= 0 Then pc = 1
 
         Set outWs = modTreportOutput.PrepareTargetSheet(outBooks(r), sheetName, cfg.DataFiles(dfIdx).template, repCtx)
-        Set insertedRng = modTreportExtract.CopyPivotSnapshot(pt, outWs, pr, pc, repCtx, cfg.DataFiles(dfIdx).onlyValues, cfg.DataFiles(dfIdx).insertRows, cfg.DataFiles(dfIdx).skipHeader)
+        Set insertedRng = modTreportExtract.CopyPivotSnapshot(pt, outWs, pr, pc, repCtx, cfg.DataFiles(dfIdx).onlyValues, cfg.DataFiles(dfIdx).insertRows, cfg.DataFiles(dfIdx).skipHeader, (Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).template)) > 0))
         modTreportExtract.ApplySheetFormatting outWs, cfg.DataFiles(dfIdx).freezeRow, cfg.DataFiles(dfIdx).freezeCol, cfg.DataFiles(dfIdx).Zoom, repCtx, _
             (Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).template)) > 0)
         modTreportExtract.ApplyOutlineGrouping insertedRng, cfg.DataFiles(dfIdx).GroupRows, cfg.General.rowsCollapsed, repCtx & ",output='" & outNames(r) & "',data_sheet='" & sheetName & "'"
@@ -297,6 +297,10 @@ Private Function ResolveReportSheetPlaceholderMaxValues(ByVal pt As PivotTable, 
 
     Set ResolveReportSheetPlaceholderMaxValues = resolved
 End Function
+
+
+
+
 
 
 

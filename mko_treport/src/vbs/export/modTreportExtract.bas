@@ -13,20 +13,30 @@ Public Function GetPresentedRange(ByVal pt As PivotTable, ByVal ctx As String) A
     Set GetPresentedRange = rg
 End Function
 
-Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Worksheet, ByVal pasteRow As Long, ByVal pasteCol As Long, ByVal ctx As String, Optional ByVal onlyValues As Boolean = False, Optional ByVal insertRows As Boolean = False, Optional ByVal skipHeader As Boolean = False) As Range
-    ' P05 (GA-P05-1..7): insert_rows=TRUE uses row P=paste_row as sample/template row.
-    ' Sequence: copy entire row P and insert H-1 copies starting at P (H=snapshot.Rows.Count),
-    ' then write snapshot at (P,paste_col). No helper rows/deletion. Final data P..P+H-1.
+Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Worksheet, ByVal pasteRow As Long, ByVal pasteCol As Long, ByVal ctx As String, Optional ByVal onlyValues As Boolean = False, Optional ByVal insertRows As Boolean = False, Optional ByVal skipHeader As Boolean = False, Optional ByVal templateInsertMode As Boolean = False) As Range
+    ' P05 (GA-P05-1..7): legacy/out-of-scope insert_rows=TRUE (non-template P09 scope) uses row P=paste_row
+    ' as sample/template row. Sequence: copy entire row P and insert H-1 copies starting at P
+    ' (H=snapshot.Rows.Count) when H>1, then write snapshot at (P,paste_col). No helper rows/deletion.
+    ' Final data P..P+H-1.
     ' P07 (D-P07-1..4): skip_header=TRUE slices presented range to remove column-header band
     ' above DataBodyRange; sliced dimensions drive all downstream operations.
+    ' P09 (OP-1..OP-4, 2026-11-17): template-only insert_rows=TRUE (templateInsertMode=True) rework.
+    ' Scope inScopeP09 = (insertRows And templateInsertMode): sample row P inserted H-2 times when H>=3,
+    ' else 0 when H==2 or H==1 (H==1 allowed). Snapshot pasted at (P-1,paste_col), returned range follows
+    ' actual placement (expected P-1..P-1+H-1, A1 verified in L3). Require P>=2 in-scope before any
+    ' structural mutation/paste (fail-fast). No deletions, no snapshot shrink. Legacy/non-template
+    ' insert_rows=TRUE and insert_rows=FALSE behavior unchanged (Q4=B).
     Dim srcRg As Range
     Dim bodyRg As Range
     Dim dstCell As Range
     Dim pr As Long, pc As Long
     Dim h As Long, w As Long
     Dim hdrOffset As Long
-    Dim i As Long
     Dim skipCtx As String
+    Dim inScopeP09 As Boolean
+    Dim insCount As Long
+    Dim dstTop As Long
+    Dim scopeCtx As String
 
     pr = pasteRow
     pc = pasteCol
@@ -74,33 +84,65 @@ Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Work
 
     h = srcRg.Rows.Count
     w = srcRg.Columns.Count
+    inScopeP09 = (insertRows And templateInsertMode)
+    scopeCtx = ",scope='template_insert_rows_p09',template_insert_mode=" & CStr(templateInsertMode) & ",in_scope_p09=" & CStr(inScopeP09)
+
     If h <= 0 Or w <= 0 Then
-        modTreportConfig.Fail 2704, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",skip_header=" & CStr(skipHeader), _
+        modTreportConfig.Fail 2704, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",skip_header=" & CStr(skipHeader) & scopeCtx, _
             "Invalid snapshot size for insertion (rows=" & CStr(h) & ",cols=" & CStr(w) & ")."
     End If
 
-    If insertRows And h > 1 Then
+    ' OP-3=A (P09, in-scope only): anchor validation before any structural mutation/paste.
+    If inScopeP09 And pr < 2 Then
+        modTreportConfig.Fail 2705, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows/paste_row',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",skip_header=" & CStr(skipHeader) & scopeCtx & ",operation='validate_p09_anchor'", _
+            "paste_row must be >= 2 for template-scoped insert_rows (P09 anchor mode) so the snapshot can be placed at paste_row-1; configured/effective paste_row=" & CStr(pr) & "."
+    End If
+
+    If inScopeP09 Then
+        ' OP-2=B: H>=3 => H-2, H==2 or H==1 => 0 (no fail-fast for H==1). H<=0 already failed.
+        If h >= 3 Then
+            insCount = h - 2
+        Else
+            insCount = 0
+        End If
+        If insCount > 0 Then
+            On Error GoTo EHRowPrep
+            ' Duplicate sample row P (entire row) H-2 times starting at P; original P shifts down.
+            dstWs.Rows(pr).Copy
+            dstWs.Rows(pr).Resize(insCount).Insert Shift:=xlDown
+            Application.CutCopyMode = False
+            On Error GoTo EH
+        End If
+        dstTop = pr - 1
+    ElseIf insertRows And h > 1 Then
+        ' Legacy out-of-scope (P05): preserve H-1 inserts at P when H>1.
+        insCount = h - 1
         On Error GoTo EHRowPrep
         ' Duplicate sample row P (entire row) H-1 times starting at P; original P shifts down.
         dstWs.Rows(pr).Copy
-        dstWs.Rows(pr).Resize(h - 1).Insert Shift:=xlDown
+        dstWs.Rows(pr).Resize(insCount).Insert Shift:=xlDown
         Application.CutCopyMode = False
         On Error GoTo EH
+        dstTop = pr
+    Else
+        ' insert_rows=FALSE or legacy insertRows with h<=1: no row preparation.
+        insCount = 0
+        dstTop = pr
     End If
 
-    Set dstCell = dstWs.Cells(pr, pc)
+    Set dstCell = dstWs.Cells(dstTop, pc)
     PasteSnapshotData srcRg, dstWs, dstCell, onlyValues, ctx
 
-    Set CopyPivotSnapshot = dstWs.Range(dstWs.Cells(pr, pc), dstWs.Cells(pr + h - 1, pc + w - 1))
+    Set CopyPivotSnapshot = dstWs.Range(dstWs.Cells(dstTop, pc), dstWs.Cells(dstTop + h - 1, pc + w - 1))
     Exit Function
 
 EHRowPrep:
     Application.CutCopyMode = False
-    modTreportConfig.Fail 2705, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",skip_header=" & CStr(skipHeader) & ",operation='copy/insert sample row'", _
+    modTreportConfig.Fail 2705, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",skip_header=" & CStr(skipHeader) & ",insert_count=" & CStr(insCount) & scopeCtx & ",operation='copy/insert sample row'", _
         "Failed to prepare/insert rows for snapshot insertion (sample row copy): " & Err.Description
 EH:
     Application.CutCopyMode = False
-    modTreportConfig.Fail 2702, ctx & ",data_sheet='" & dstWs.Name & "',parameter='only_values/insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",skip_header=" & CStr(skipHeader), _
+    modTreportConfig.Fail 2702, ctx & ",data_sheet='" & dstWs.Name & "',parameter='only_values/insert_rows',paste_row=" & CStr(pr) & ",paste_col=" & CStr(pc) & ",rows=" & CStr(h) & ",cols=" & CStr(w) & ",insert_rows=" & CStr(insertRows) & ",only_values=" & CStr(onlyValues) & ",skip_header=" & CStr(skipHeader) & ",dst_top=" & CStr(dstTop) & scopeCtx, _
         "Failed to copy/paste pivot snapshot: " & Err.Description
 End Function
 
@@ -138,7 +180,10 @@ EH:
     Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
 
-' P05 (GA-P05-7): helper-row deletion removed; insert_rows=TRUE now uses sample row P duplicated H-1 times with no helper rows.
+' P05 (GA-P05-7): helper-row deletion removed; insert_rows=TRUE now uses sample row P duplicated with no helper rows.
+' P09 (2026-11-17, OP-1..OP-4): template-scoped insert_rows rework uses H-2 inserts (H>=3, else 0 for H==2/H==1)
+' and pastes snapshot at P-1 with returned range at actual placement (expected P-1..P-1+H-1, A1 L3-verified).
+' Legacy/non-template insert_rows=TRUE retains P05 behavior (H-1 at P when H>1, paste/return at P). No deletions.
 
 Public Sub ApplySheetFormatting(ByVal ws As Worksheet, ByVal freezeRow As Variant, ByVal freezeCol As Variant, ByVal zoomVal As Variant, ByVal ctx As String, Optional ByVal preserveTargetSettings As Boolean = False)
     Dim hasZoom As Boolean
@@ -338,6 +383,10 @@ GroupingComFail:
     modTreportConfig.Fail 2703, ctx & ",group_rows=" & CStr(groupColRel) & ",abs_col=" & CStr(absCol) & ",rows_collapsed=" & CStr(rowsCollapsed), _
         "Outline grouping failed after validation: " & Err.Description
 End Sub
+
+
+
+
 
 
 

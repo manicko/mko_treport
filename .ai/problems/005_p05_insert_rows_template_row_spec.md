@@ -148,3 +148,11 @@ This **supersedes** the current GA-3/P04 implementation for `insert_rows=TRUE`, 
 - **Repo/code research:** `.ai/problems/P05.md`; `.ai/problems/004_p04_template_insert_spec.md`; `mko_treport/src/vbs/export/modTreportExtract.bas`, `modTreportRun.bas`, `modTreportConfig.bas`, `modTreportOutput.bas`; `docs/01-vba-reporting/configuration-model.md`, `docs/01-vba-reporting/pipeline-and-dataflow.md`.
 - **Internal researcher tasks completed:** (1) current architecture/invariants/call sites and P05-vs-GA-3 conflict analysis; (2) VBA/Excel row-duplication and `only_values`/PasteSpecial interaction best practices with recommended approach.
 - **Follow-up:** targeted spike on real template workbooks only if implementation/L3 reveals unresolved Excel-specific edge cases (merges/formulas/CF/grouping).
+
+## Amendment — P09 (2026-11-17, locked OP-1..OP-4)
+
+- **References:** .ai/problems/P09.md, .ai/plans/008-p09-insert-rows-anchor-rework.md (Section 6 Block A, Section 10).
+- **Scope (OP-1=A, template-only):** P09 reworks behavior only when insert_rows=TRUE **and** 	emplate is set (Len(Norm(template))>0). It does not change insert_rows=FALSE or non-template insert_rows=TRUE.
+- **Before (P05 contract, preserved for non-template insert_rows=TRUE):** sample row P=paste_row inserted H-1 times at P when H>1 (H==1 => 0), snapshot pasted at (P,paste_col), final/returned range P..P+H-1, no helper rows/deletion.
+- **After (P09, template-scoped insert_rows=TRUE):** require P >= 2 (fail-fast before structural mutation/paste with actionable diagnostic if not, OP-3=A). Sample row P inserted H-2 times when H>=3, else   when H==2 or H==1 (H==1 allowed, OP-2=B). Snapshot pasted at (P-1,paste_col) over H x W with no deletions/no shrink. Returned range follows actual placement, expected P-1..P-1+H-1 over pc..pc+W-1 but subject to L3 Excel-shift/A1 verification, especially for H==1/H==2 with no inserts. only_values and skip_header semantics preserved as before.
+- **Regression constraint (Q4=B):** preserve existing layouts/outputs for out-of-scope cases (insert_rows=FALSE and non-template insert_rows=TRUE, including legacy H/P behavior and no P09 P<2/P-1 anchor fail-fast).
