@@ -29,8 +29,8 @@ Public Type TreportDataFile
     Zoom As Variant
     GroupRows As Variant ' deferred/no-op (D13)
     template As String
-    OnlyValues As Boolean
-    InsertRows As Boolean
+    onlyValues As Boolean
+    insertRows As Boolean
     RowIndex As Long
 End Type
 
@@ -107,7 +107,7 @@ Public Function CellVal(ByVal lo As ListObject, ByVal rowIdx As Long, ByVal colN
     If lo.DataBodyRange Is Nothing Then
         CellVal = Empty
     Else
-        CellVal = lo.DataBodyRange.Cells(rowIdx, ci).value
+        CellVal = lo.DataBodyRange.Cells(rowIdx, ci).Value
     End If
 End Function
 
@@ -141,8 +141,8 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
     If n = 0 Then Fail 2103, "config/general", "ListObject 'general' has no data rows."
     cfg.General.rowsCollapsed = False
     For i = 1 To n
-        pName = Norm(loG.DataBodyRange.Cells(i, ColIndex(loG, "parameter")).value)
-        pValRaw = loG.DataBodyRange.Cells(i, ColIndex(loG, "value")).value
+        pName = Norm(loG.DataBodyRange.Cells(i, ColIndex(loG, "parameter")).Value)
+        pValRaw = loG.DataBodyRange.Cells(i, ColIndex(loG, "value")).Value
         pVal = Norm(pValRaw)
         Select Case LCase$(pName)
             Case "input_path": cfg.General.inputPath = pVal
@@ -209,22 +209,22 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
         If Len(cfg.DataFiles(i).Filters) = 0 Then Fail 2117, "config/data_files[row=" & i & ",data_file=" & cfg.DataFiles(i).DataFile & "]", "column 'filters' is required."
 
         cfg.DataFiles(i).template = ""
-        cfg.DataFiles(i).OnlyValues = False
-        cfg.DataFiles(i).InsertRows = False
+        cfg.DataFiles(i).onlyValues = False
+        cfg.DataFiles(i).insertRows = False
 
         If HasColumn(loD, "template") Then
             cfg.DataFiles(i).template = ReadP04TemplateValue( _
-                loD.DataBodyRange.Cells(i, ColIndex(loD, "template")).value, _
+                loD.DataBodyRange.Cells(i, ColIndex(loD, "template")).Value, _
                 i, cfg.DataFiles(i).DataFile, cfg.DataFiles(i).DataSheet)
         End If
         If HasColumn(loD, "only_values") Then
-            cfg.DataFiles(i).OnlyValues = ReadP04BooleanValue( _
-                loD.DataBodyRange.Cells(i, ColIndex(loD, "only_values")).value, _
+            cfg.DataFiles(i).onlyValues = ReadP04BooleanValue( _
+                loD.DataBodyRange.Cells(i, ColIndex(loD, "only_values")).Value, _
                 "only_values", i, cfg.DataFiles(i).DataFile, cfg.DataFiles(i).DataSheet)
         End If
         If HasColumn(loD, "insert_rows") Then
-            cfg.DataFiles(i).InsertRows = ReadP04BooleanValue( _
-                loD.DataBodyRange.Cells(i, ColIndex(loD, "insert_rows")).value, _
+            cfg.DataFiles(i).insertRows = ReadP04BooleanValue( _
+                loD.DataBodyRange.Cells(i, ColIndex(loD, "insert_rows")).Value, _
                 "insert_rows", i, cfg.DataFiles(i).DataFile, cfg.DataFiles(i).DataSheet)
         End If
     Next i
@@ -347,6 +347,8 @@ Public Function NormalizeInputFolder(ByVal inputPath As String) As String
     If Right$(p, 1) <> "\" Then p = p & "\"
     NormalizeInputFolder = p
 End Function
+
+
 
 
 

@@ -13,11 +13,13 @@ Public Function GetPresentedRange(ByVal pt As PivotTable, ByVal ctx As String) A
     Set GetPresentedRange = rg
 End Function
 
-Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Worksheet, ByVal pasteRow As Long, ByVal pasteCol As Long, ByVal ctx As String) As Range
+Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Worksheet, ByVal pasteRow As Long, ByVal pasteCol As Long, ByVal ctx As String, Optional ByVal onlyValues As Boolean = False, Optional ByVal insertRows As Boolean = False) As Range
     Dim srcRg As Range
     Dim dstCell As Range
     Dim pr As Long, pc As Long
     Dim i As Long
+    Dim h As Long, w As Long
+    Dim insertAtRow As Long
 
     pr = pasteRow
     pc = pasteCol
@@ -32,7 +34,55 @@ Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Work
     On Error GoTo EH
 
     Set srcRg = GetPresentedRange(srcPt, ctx)
-    Set dstCell = dstWs.Cells(pr, pc)
+    h = srcRg.Rows.Count
+    w = srcRg.Columns.Count
+    If h <= 0 Or w <= 0 Then
+        modTreportConfig.Fail 2704, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows'", _
+            "Invalid snapshot size for insertion (rows=" & CStr(h) & ",cols=" & CStr(w) & ")."
+    End If
+
+    If insertRows Then
+        insertAtRow = pr + 1
+        On Error GoTo EHRowPrep
+        dstWs.Rows(insertAtRow & ":" & (insertAtRow + h - 1)).Insert Shift:=xlDown
+        On Error GoTo EH
+        Set dstCell = dstWs.Cells(insertAtRow, pc)
+    Else
+        Set dstCell = dstWs.Cells(pr, pc)
+    End If
+
+    PasteSnapshotData srcRg, dstWs, dstCell, onlyValues, ctx
+
+    If insertRows Then
+        DeleteInsertRowsHelpers dstWs, pr, h, ctx
+        Set CopyPivotSnapshot = dstWs.Range(dstWs.Cells(pr, pc), dstWs.Cells(pr + h - 1, pc + w - 1))
+    Else
+        Set CopyPivotSnapshot = dstWs.Range(dstCell, dstCell.Offset(h - 1, w - 1))
+    End If
+    Exit Function
+
+EHRowPrep:
+    modTreportConfig.Fail 2705, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(pr) & ",rows=" & CStr(h), _
+        "Failed to prepare/insert rows for snapshot insertion: " & Err.Description
+EH:
+    Application.CutCopyMode = False
+    modTreportConfig.Fail 2702, ctx & ",data_sheet='" & dstWs.Name & "',parameter='only_values/insert_rows'", _
+        "Failed to copy/paste pivot snapshot: " & Err.Description
+End Function
+
+Private Sub PasteSnapshotData(ByVal srcRg As Range, ByVal dstWs As Worksheet, ByVal dstCell As Range, ByVal onlyValues As Boolean, ByVal ctx As String)
+    Dim i As Long
+    Dim h As Long
+    Dim dstRg As Range
+
+    h = srcRg.Rows.Count
+    On Error GoTo EH
+    If onlyValues Then
+        ' GA-2: strict values only (no source formats/number formats/widths/heights). Preserve target formatting.
+        Set dstRg = dstWs.Range(dstCell, dstCell.Offset(h - 1, srcRg.Columns.Count - 1))
+        dstRg.Value = srcRg.Value
+        Exit Sub
+    End If
 
     srcRg.Copy
     dstCell.PasteSpecial Paste:=xlPasteValuesAndNumberFormats
@@ -42,43 +92,76 @@ Public Function CopyPivotSnapshot(ByVal srcPt As PivotTable, ByVal dstWs As Work
     dstCell.PasteSpecial Paste:=xlPasteColumnWidths
     Application.CutCopyMode = False
 
-    For i = 1 To srcRg.Rows.Count
+    For i = 1 To h
         On Error Resume Next
-        dstWs.Rows(pr + i - 1).RowHeight = srcRg.Rows(i).RowHeight
+        dstWs.Rows(dstCell.Row + i - 1).RowHeight = srcRg.Rows(i).RowHeight
         On Error GoTo EH
     Next i
+    Exit Sub
 
-    Set CopyPivotSnapshot = dstWs.Range(dstCell, dstCell.Offset(srcRg.Rows.Count - 1, srcRg.Columns.Count - 1))
-    Exit Function
 EH:
     Application.CutCopyMode = False
-    modTreportConfig.Fail 2702, ctx, "Failed to copy/paste pivot snapshot: " & Err.Description
-End Function
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
 
-Public Sub ApplySheetFormatting(ByVal ws As Worksheet, ByVal freezeRow As Variant, ByVal freezeCol As Variant, ByVal zoomVal As Variant, ByVal ctx As String)
-    On Error Resume Next
-    ws.Activate
-    ActiveWindow.FreezePanes = False
-    ActiveWindow.DisplayGridlines = False
-    If Not IsEmpty(zoomVal) And Not IsNull(zoomVal) And Len(modTreportConfig.Norm(zoomVal)) > 0 Then
-        If isNumeric(zoomVal) Then
-            Dim z As Double
-            z = CDbl(zoomVal)
-            If z > 0 And z <= 5 Then z = z * 100
-            If z >= 10 And z <= 400 Then ActiveWindow.Zoom = CLng(z)
-        End If
+Public Sub DeleteInsertRowsHelpers(ByVal dstWs As Worksheet, ByVal pasteRowFinal As Long, ByVal snapshotRows As Long, ByVal ctx As String)
+    ' GA-3/CR-4: after temporary insert at P+1..P+H, delete helper row below (P+H+1) then above (P).
+    ' Separate callable function; operates on provided target sheet/range parameters.
+    Dim p As Long, h As Long
+    p = pasteRowFinal
+    h = snapshotRows
+    If p <= 0 Then p = 1
+    If h <= 0 Then
+        modTreportConfig.Fail 2706, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(p), _
+            "Invalid snapshot height for helper-row deletion."
     End If
+
+    On Error GoTo EH
+    dstWs.Rows(p + h + 1).Delete Shift:=xlUp
+    dstWs.Rows(p).Delete Shift:=xlUp
+    Exit Sub
+
+EH:
+    modTreportConfig.Fail 2707, ctx & ",data_sheet='" & dstWs.Name & "',parameter='insert_rows',paste_row=" & CStr(p) & ",rows=" & CStr(h), _
+        "Failed to delete helper rows for insert_rows: " & Err.Description
+End Sub
+
+Public Sub ApplySheetFormatting(ByVal ws As Worksheet, ByVal freezeRow As Variant, ByVal freezeCol As Variant, ByVal zoomVal As Variant, ByVal ctx As String, Optional ByVal preserveTargetSettings As Boolean = False)
+    Dim hasZoom As Boolean
+    Dim hasFreeze As Boolean
     Dim fr As Long, fc As Long
+    Dim z As Double
+    Dim selRow As Long, selCol As Long
+
+    hasZoom = (Not IsEmpty(zoomVal) And Not IsNull(zoomVal) And Len(modTreportConfig.Norm(zoomVal)) > 0)
     fr = 0: fc = 0
     If Not IsEmpty(freezeRow) And Not IsNull(freezeRow) And isNumeric(freezeRow) Then fr = CLng(freezeRow)
     If Not IsEmpty(freezeCol) And Not IsNull(freezeCol) And isNumeric(freezeCol) Then fc = CLng(freezeCol)
-    If fr > 0 Or fc > 0 Then
-        Dim selRow As Long, selCol As Long
+    hasFreeze = (fr > 0 Or fc > 0)
+
+    On Error Resume Next
+    ws.Activate
+    If Not preserveTargetSettings Then
+        ActiveWindow.FreezePanes = False
+        ActiveWindow.DisplayGridlines = False
+    Else
+        ' GA-4: preserve template/display settings by default; apply explicit report overrides only.
+        If hasFreeze Then ActiveWindow.FreezePanes = False
+    End If
+
+    If hasZoom And isNumeric(zoomVal) Then
+        z = CDbl(zoomVal)
+        If z > 0 And z <= 5 Then z = z * 100
+        If z >= 10 And z <= 400 Then ActiveWindow.Zoom = CLng(z)
+    End If
+
+    If hasFreeze Then
         selRow = IIf(fr > 0, fr + 1, 1)
         selCol = IIf(fc > 0, fc + 1, 1)
         ws.Cells(selRow, selCol).Select
         ActiveWindow.FreezePanes = True
     End If
+
     ws.Cells(1, 1).Select
     On Error GoTo 0
 End Sub
@@ -241,6 +324,8 @@ GroupingComFail:
     modTreportConfig.Fail 2703, ctx & ",group_rows=" & CStr(groupColRel) & ",abs_col=" & CStr(absCol) & ",rows_collapsed=" & CStr(rowsCollapsed), _
         "Outline grouping failed after validation: " & Err.Description
 End Sub
+
+
 
 
 

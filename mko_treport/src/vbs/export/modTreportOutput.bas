@@ -341,26 +341,78 @@ EH:
     modTreportConfig.Fail 2609, ctx & ",file='" & fullPath & "'", "Unable to save output workbook: " & Err.Description
 End Sub
 
-Public Function AddReportSheet(ByVal outWb As Workbook, ByVal sheetName As String, ByVal ctx As String) As Worksheet
-    Dim ws As Worksheet, existing As Worksheet
+Private Function FindWorksheetCaseInsensitive(ByVal wb As Workbook, ByVal wsName As String) As Worksheet
+    Dim ws As Worksheet
+    If wb Is Nothing Then Exit Function
+    For Each ws In wb.Worksheets
+        If StrComp(ws.Name, wsName, vbTextCompare) = 0 Then
+            Set FindWorksheetCaseInsensitive = ws
+            Exit Function
+        End If
+    Next ws
+    Set FindWorksheetCaseInsensitive = Nothing
+End Function
+
+Public Function PrepareTargetSheet(ByVal outWb As Workbook, ByVal sheetName As String, ByVal templateName As String, ByVal ctx As String) As Worksheet
+    ' P04 GA-7/GA-5/CR-2: prepare target sheet for subreport output.
+    ' - templateName blank: create new plain worksheet (ordinary path), preserve existing behavior.
+    ' - templateName filled: copy Worksheet template from ThisWorkbook (macro workbook) into outWb.
+    ' No existing sheet is overwritten/deleted on conflict (fail-fast). Source template is never modified.
+    Dim ws As Worksheet
+    Dim existing As Worksheet
+    Dim tplWs As Worksheet
+    Dim tplNorm As String
+    Dim wsCountBefore As Long
+
     On Error Resume Next
     Set existing = outWb.Worksheets(sheetName)
     On Error GoTo 0
     If Not existing Is Nothing Then
-        Application.DisplayAlerts = False
-        On Error Resume Next
-        existing.Delete
-        On Error GoTo 0
-        Application.DisplayAlerts = True
+        modTreportConfig.Fail 2634, ctx & ",data_sheet='" & sheetName & "',parameter='template',template='" & templateName & "'", _
+            "Target sheet name conflict in output workbook: sheet '" & sheetName & "' already exists and cannot be overwritten or deleted."
     End If
-    On Error GoTo EH
-    Set ws = outWb.Worksheets.Add(After:=outWb.Worksheets(outWb.Worksheets.Count))
+
+    tplNorm = modTreportConfig.Norm(templateName)
+    If Len(tplNorm) = 0 Then
+        On Error GoTo EHCreate
+        Set ws = outWb.Worksheets.Add(After:=outWb.Worksheets(outWb.Worksheets.Count))
+        ws.Name = sheetName
+        Set PrepareTargetSheet = ws
+        Exit Function
+EHCreate:
+        modTreportConfig.Fail 2610, ctx & ",data_sheet='" & sheetName & "',parameter='data_sheet/template'", _
+            "Unable to create report sheet: " & Err.Description
+    End If
+
+    Set tplWs = FindWorksheetCaseInsensitive(ThisWorkbook, tplNorm)
+    If tplWs Is Nothing Then
+        modTreportConfig.Fail 2635, ctx & ",data_sheet='" & sheetName & "',parameter='template',template='" & tplNorm & "'", _
+            "Template worksheet not found or not usable in macro workbook (ThisWorkbook)."
+    End If
+
+    On Error GoTo EHCopy
+    wsCountBefore = outWb.Worksheets.Count
+    tplWs.Copy After:=outWb.Worksheets(outWb.Worksheets.Count)
+    If outWb.Worksheets.Count <= wsCountBefore Then
+        modTreportConfig.Fail 2636, ctx & ",data_sheet='" & sheetName & "',parameter='template',template='" & tplNorm & "'", _
+            "Failed to copy template worksheet into output workbook."
+    End If
+    Set ws = outWb.Worksheets(outWb.Worksheets.Count)
+    On Error GoTo EHCopy
+
     ws.Name = sheetName
-    ' remove default sheet later if extra; keep simple
-    Set AddReportSheet = ws
+    ws.Visible = xlSheetVisible
+    Set PrepareTargetSheet = ws
     Exit Function
-EH:
-    modTreportConfig.Fail 2610, ctx & ",sheet='" & sheetName & "'", "Unable to create report sheet: " & Err.Description
+
+EHCopy:
+    modTreportConfig.Fail 2636, ctx & ",data_sheet='" & sheetName & "',parameter='template',template='" & tplNorm & "'", _
+        "Failed to prepare target sheet from template: " & Err.Description
+End Function
+
+Public Function AddReportSheet(ByVal outWb As Workbook, ByVal sheetName As String, ByVal ctx As String) As Worksheet
+    ' Compatibility wrapper: ordinary sheet preparation (no template).
+    Set AddReportSheet = PrepareTargetSheet(outWb, sheetName, vbNullString, ctx)
 End Function
 
 Public Sub CleanupDefaultSheets(ByVal outWb As Workbook, ByVal producedSheetNames As Object, ByVal ctx As String)
@@ -450,6 +502,8 @@ Public Sub EnsureProducedSheetsPresent(ByVal outWb As Workbook, ByVal producedSh
         End If
     Next k
 End Sub
+
+
 
 
 

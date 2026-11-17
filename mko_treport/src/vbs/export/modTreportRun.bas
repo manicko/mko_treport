@@ -193,7 +193,8 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
         ' D14: fail fast on true collision within the same output workbook namespace;
         ' identical final names across different output workbooks are allowed (D-01).
         If outUsedSheetNames(r).Exists(LCase$(sheetName)) Then
-            modTreportConfig.Fail 2612, repCtx & ",output='" & outNames(r) & "'", "Sheet name collision in output workbook after substitution/sanitization: '" & sheetName & "'."
+            modTreportConfig.Fail 2612, repCtx & ",output='" & outNames(r) & ",data_sheet='" & sheetName & "',parameter='report_sheet/data_sheet'", _
+                "Sheet name collision in output workbook after substitution/sanitization: '" & sheetName & "'."
         End If
         outUsedSheetNames(r).Add LCase$(sheetName), True
 
@@ -203,10 +204,11 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
         If pr <= 0 Then pr = 1
         If pc <= 0 Then pc = 1
 
-        Set outWs = modTreportOutput.AddReportSheet(outBooks(r), sheetName, repCtx)
-        Set insertedRng = modTreportExtract.CopyPivotSnapshot(pt, outWs, pr, pc, repCtx)
-        modTreportExtract.ApplySheetFormatting outWs, cfg.DataFiles(dfIdx).freezeRow, cfg.DataFiles(dfIdx).freezeCol, cfg.DataFiles(dfIdx).Zoom, repCtx
-        modTreportExtract.ApplyOutlineGrouping insertedRng, cfg.DataFiles(dfIdx).GroupRows, cfg.General.rowsCollapsed, repCtx & ",output='" & outNames(r) & "'"
+        Set outWs = modTreportOutput.PrepareTargetSheet(outBooks(r), sheetName, cfg.DataFiles(dfIdx).template, repCtx)
+        Set insertedRng = modTreportExtract.CopyPivotSnapshot(pt, outWs, pr, pc, repCtx, cfg.DataFiles(dfIdx).onlyValues, cfg.DataFiles(dfIdx).insertRows)
+        modTreportExtract.ApplySheetFormatting outWs, cfg.DataFiles(dfIdx).freezeRow, cfg.DataFiles(dfIdx).freezeCol, cfg.DataFiles(dfIdx).Zoom, repCtx, _
+            (Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).template)) > 0)
+        modTreportExtract.ApplyOutlineGrouping insertedRng, cfg.DataFiles(dfIdx).GroupRows, cfg.General.rowsCollapsed, repCtx & ",output='" & outNames(r) & "',data_sheet='" & sheetName & "'"
         Set insertedRng = Nothing
         Set outWs = Nothing
     Next r
@@ -295,6 +297,8 @@ Private Function ResolveReportSheetPlaceholderMaxValues(ByVal pt As PivotTable, 
 
     Set ResolveReportSheetPlaceholderMaxValues = resolved
 End Function
+
+
 
 
 
