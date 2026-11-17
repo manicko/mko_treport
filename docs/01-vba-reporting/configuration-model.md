@@ -23,6 +23,7 @@ Defines the configuration model that drives treport behavior: the `settings` wor
 - Behavior is data-driven: source resolution, report generation, filtering, layout, and output naming depend on configured rows and values.
 - Values are normalized/trimmed (`Norm`) and validated with contextual fail-fast errors.
 - `data_files` rows are processed in configured order; this order also drives output sheet assembly.
+- `report_sheet` placeholder derivation/substitution is token-driven at runtime from `report_sheet` templates (resolved in code, e.g. `modTreportOutput` / `modTreportRun.ResolveReportSheetPlaceholderMaxValues`). Presence of a `placeholders` ListObject does not imply table-driven runtime placeholder resolution.
 
 ## Tables and Fields
 
@@ -90,7 +91,7 @@ Implemented/expected behavior at a high level (see `modTreportConfig`, `modTrepo
 
 ## Row grouping behavior (implemented contract)
 
-- **`group_rows`** (per `data_files` row): after snapshot copy/paste and formatting, Excel Outline row grouping may be applied within the inserted/pasted range bounds only. The grouping column is `group_rows` (1-based, relative to copied range width). Contiguous row runs are grouped when every cell in that column inside bounds has no fill/static fill: pattern none (`xlNone`) or solid white `RGB(255,255,255)`. Conditional formatting is ignored. Grouping is per-subreport and does not cross bounds.
+- **`group_rows`** (per `data_files` row): after snapshot copy/paste and formatting, Excel Outline row grouping may be applied within the inserted/pasted range bounds only. The grouping column is `group_rows` (1-based, relative to copied range width). Contiguous row runs are grouped when every cell in that column inside bounds has no fill/static fill: pattern none (`xlNone`), solid white `RGB(255,255,255)`, or a solid/system-automatic background treated as white/no-fill for grouping compatibility (e.g. system/indexed background). Conditional formatting is ignored. Grouping is per-subreport and does not cross bounds.
 - **Invalid/missing/out-of-width `group_rows`**: deterministic skip for that subreport with explicit diagnostic (no fail-fast, no COM grouping attempt on parameter-invalid cases).
 - **`general.rows_collapsed`**: controls collapsed/expanded state for created groups (absent/blank/False => expanded/default; True => collapsed). Invalid present values fail config validation.
 - **Runtime verification note:** end-to-end Outline/collapse behavior and edge-case rendering are not fully runtime-verified in this audit.

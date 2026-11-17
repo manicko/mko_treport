@@ -72,10 +72,10 @@ High-level semantics as specified/implemented in exported modules (`modTreportPi
 - **Placement behavior:**
   - Available-but-inactive fields: move to Filters area, then filter/sort as required.
   - Active fields (in Filters/Columns/Rows): filter in place and do not move fields out of Columns/Rows; preserve layout.
-  - Unavailable required fields: fail fast, except defined value exceptions.
+  - Unavailable required fields: fail fast (subject to the uniform selection rule below).
 - **Staging:** `data_files.filters` are applied once per source; report-level `articleLevel4Name_clean` and `targetAudience` filters are reapplied per report row without leaking across reports.
 - **Matching:** exact-after-trim/value-normalized matching semantics are used.
-- **Generalized `articleLevel4Name_clean` multi-value behavior (report-level):** when multiple values are configured (split by `general.delimeter`), any configured token not found among available pivot items is ignored. If at least one configured value matches, the matched subset is applied and processing proceeds for that report. If none of the configured values match in that report context, the run emits a warning with context (e.g. report/data-file) and skips that report without producing its output for that processing step, then continues with other reports (does not fail the whole run). `targetAudience` remains subject to its existing strict handling.
+- **Uniform selection rule (D9):** if a required field is missing/unavailable in the applicable context, or none of the configured values/tokens are matchable, processing fails fast with contextual diagnostics. If at least one configured value is matchable, the matched subset is applied and processing proceeds. This applies uniformly to data-file and report-level filters (including multi-value `articleLevel4Name_clean` split by `general.delimeter` and `targetAudience`); no warn-and-skip path is used for no-match cases.
 
 **Verification note:** P01 runtime behavior, staging edge cases, layout preservation, and dataset-specific pivot behavior are not evidenced in this audit.
 
@@ -84,7 +84,7 @@ High-level semantics as specified/implemented in exported modules (`modTreportPi
 - Presented pivot data range is determined after filtering (`modTreportExtract`, preferring `TableRange1` with fallback behavior as implemented).
 - Snapshot is copied as static content: values and number formats, cell formats, column widths, and row heights (as implemented). The inserted/pasted range bounds are used for subsequent bounds-scoped processing.
 - Sheet formatting/layout steps include gridlines handling and optional freeze panes/zoom normalization.
-- **Row grouping (Outline):** when applicable, grouping is applied after paste/formatting within inserted/pasted bounds only, using `data_files.group_rows` (1-based relative column) and static-fill predicate (no fill/pattern none or solid white `RGB(255,255,255)`, conditional formatting ignored). Invalid/missing/out-of-width parameters are skipped for that subreport with explicit diagnostics (no fail-fast). Collapse state follows `general.rows_collapsed` (default expanded).
+- **Row grouping (Outline):** when applicable, grouping is applied after paste/formatting within inserted/pasted bounds only, using `data_files.group_rows` (1-based relative column) and static-fill predicate (no fill/pattern none, solid white `RGB(255,255,255)`, or solid/system-automatic background treated as white/no-fill for compatibility; conditional formatting ignored). Invalid/missing/out-of-width parameters are skipped for that subreport with explicit diagnostics (no fail-fast). Collapse state follows `general.rows_collapsed` (default expanded).
 - **Verification note:** exact presented-range boundaries and visual/data fidelity (including exclusion of pivot/page-filter/PQ artifacts in all cases) are runtime-unverified. Outline grouping/collapse behavior is implemented in exports but not fully runtime-verified in this audit.
 
 ## Output Workbooks and Sheets

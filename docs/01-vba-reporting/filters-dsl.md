@@ -63,7 +63,7 @@ Filters consist of clauses separated by `|`.
 ## Application Contexts
 
 - **Report-level filters**: report attributes (e.g. `articleLevel4Name_clean`, `targetAudience`) are applied per report/output context without leaking across reports.
-- **Generalized `articleLevel4Name_clean` multi-value handling (report-level):** values are split by `general.delimeter` and matched exactly-after-trim to available pivot items. If at least one configured value is present/valid, the matched subset is applied and report generation proceeds. If none of the configured values are present/valid for that report context, emit a warning (including report/file context) and skip that report; continue with other reports without failing the whole run. `targetAudience` remains strict (missing/unmatchable required values fail fast unless separately specified).
+- **Uniform selection rule (D9, all applicable filters):** configured values/tokens are resolved and matched against available pivot context (for multi-value `articleLevel4Name_clean`, values are split by `general.delimeter` and matched exactly after trim). If at least one configured value is matchable, the matched subset is applied and processing proceeds. If a required field is missing/unavailable in the applicable context, or none of the configured values are matchable, processing fails fast with contextual diagnostics (no warn-and-skip). This applies uniformly to data-file and report-level filters, including `articleLevel4Name_clean` and `targetAudience`.
 
 ## Validation and Fail-fast
 
@@ -72,6 +72,7 @@ Expected fail-fast conditions include (non-exhaustive, high-level):
 - Empty or malformed clause/expression structure.
 - Duplicate field clauses where prohibited.
 - Required fields/members not found or not resolvable in the current pivot context.
+- No matchable configured values for an applicable filter (D9), or a required field missing/unavailable in the applicable context.
 - Unresolvable `min`/`max` or `max-N` offset (bounds/domain violations, missing numeric domain, malformed/ambiguous forms).
 - Unresolvable/invalid derived placeholders in `report_sheet` (including offset/domain failures) where required.
 - No valid selectable data/values where required by processing rules.
