@@ -37,9 +37,10 @@ Describes the treport VBA reporting subsystem: a configuration-driven Excel macr
 - Applying pivot filters and extracting static report snapshots into output workbooks.
 - Deterministic validation/fail-fast diagnostics and application-state restore/cleanup intent.
 
-**Out of scope / deferred:**
+**Out of scope:**
 - External runtime services or non-VBA end-user execution dependencies.
-- `group_rows` grouping behavior (present in configuration but deferred/no-op).
+
+**P01 (current exports, runtime-unverified):** `data_files.filters` and `report_sheet` support `max-N` offsets with deterministic bounds/domain validation; produced output workbooks remove Excel-default empty sheets on successful completion paths with produced-sheet guards; and per-subreport, bounds-scoped Excel Outline row grouping is driven by `data_files.group_rows` with `general.rows_collapsed` control (invalid grouping parameters skipped with diagnostics). End-to-end behavior remains subject to manual L2 compile and L3 runtime verification on working copies.
 
 ## Component Overview
 

@@ -31,9 +31,9 @@ Filters consist of clauses separated by `|`.
 - **Clause form:** `<field>=<expr>`
 - **Clause separator:** `|` (multiple clauses)
 - **List delimiter:** configured `general.delimeter` (value from configuration) used inside list expressions
-- **Range form:** parenthesized bounds `(start-end)` (e.g. scalar/date/period bounds as supported by implementation)
-- **Special bounds:** `min` and `max` tokens in range/scalar contexts where applicable
-- **Whitespace:** trimmed/normalized around tokens
+- **Range form:** parenthesized bounds `(start-end)` (e.g. scalar/numeric/period bounds as supported by implementation). A bound token may be `min`, `max`, a numeric literal, or `max - N` (offset from the field's resolved maximum).
+- **Special bounds:** `min` and `max` tokens in range/scalar contexts where applicable; `max - N` supported as an offset form (see below).
+- **Whitespace:** trimmed/normalized around tokens. For `max - N`, optional whitespace around `-` is accepted in supported forms.
 
 ### Expression forms (high-level)
 
@@ -41,17 +41,23 @@ Filters consist of clauses separated by `|`.
 |---|---|---|
 | Scalar | `Field=value` | Single value match/selection semantics. |
 | List | `Field=v1&v2&v3` (delimiter per config) | Multiple explicit values. |
-| Range | `Field=(min-max)` or bounded range | Inclusive/bound semantics as implemented; supports `min`/`max` resolution. |
-| Mixed clauses | `Year=2024|Week Number=(1-max)` | Clauses combined with `|`. |
+| Range | `Field=(min-max)`, `Field=(1-max-1)` | Inclusive bound semantics as implemented; supports `min`/`max` and `max-N` bounds (resolved against pre-resolved per-field numeric domain). |
+| Scalar (max/offset) | `Field=max` or `Field=max-N` | Resolves to the field maximum or `max_value - N` (exact domain membership required). |
+| Mixed clauses | `Year=2024|Week Number=(1-max-3)` | Clauses combined with `|`. |
 
 > Exact matching/typing behavior depends on pivot field members and implementation normalization; runtime equivalence is not fully verified in this audit.
 
 ## Resolution Semantics
 
 - **Field/value normalization:** values and field tokens are normalized/trimmed before resolution/matching.
-- **`min` / `max` resolution:** resolved against available (typically numeric) pivot members for the relevant field/context.
-- **Dependency-aware period resolution:** when `Year` context is present, year-related resolution/selection is applied before deriving dependent maxima such as `Month Number` and `Week Number` (as implemented in `ResolveMinMaxAndYear`/related logic).
-- **Derived placeholders:** `max_year`, `max_monthnum`, and `max_weeknum` are derived from resolved context and used for `report_sheet` placeholder substitution (see [Configuration model](./configuration-model.md)).
+- **`min` / `max` resolution:** resolved against available (typically numeric) pivot members for the relevant field/context, using pre-resolved per-field global numeric domain/state captured before clause application (deterministic ordering/selection semantics preserved).
+- **`max - N` offsets:** supported wherever `max` is a valid bound/value token in `data_files.filters` (scalar and range contexts). `max_value` is the resolved maximum of the referenced field from pre-resolved global context.
+  - **D1 (bounds):** `N` is a base-10 non-negative integer (`0 <= N < max_value`). `N == 0` is equivalent to `max`. `N >= max_value` fails fast with clear context.
+  - **D2 (domain presence):** for every resolved `max-N` bound token, the computed exact value (`max_value - N`) must be present among the field's numeric domain items (exact membership consistent with domain semantics). If not present, fail fast with clear context (field, resolved max, N, computed value, clause/expression/token as applicable).
+  - `min-N`, `+N`, and offsets on numeric literals are out of scope. `max-N` semantics are not introduced for list elements (list element tokens remain literal per existing behavior).
+  - Malformed/unresolvable offset forms fail fast with clear context. Existing valid expressions remain supported (including `(1-max)`, `(min-max)`, numeric/signed ranges as applicable); offset parsing is deterministic and unambiguous with range separators.
+- **Dependency-aware period resolution:** when `Year` context is present, year-related resolution/selection is applied before deriving dependent maxima such as `Month Number` and `Week Number` (as implemented in resolution logic).
+- **Derived placeholders in `report_sheet`:** `<max_<field>>` and `<max-N_<field>>` are resolved separately for output naming in the report-sheet context (pre-filter, independent of `data_files.filters`) with aligned D1/D2 rules; see [Configuration model](./configuration-model.md).
 - **Determinism:** given the same resolved context and members, resolution is intended to be deterministic.
 
 ## Application Contexts
@@ -66,7 +72,8 @@ Expected fail-fast conditions include (non-exhaustive, high-level):
 - Empty or malformed clause/expression structure.
 - Duplicate field clauses where prohibited.
 - Required fields/members not found or not resolvable in the current pivot context.
-- Unresolvable `min`/`max` or derived placeholder references.
+- Unresolvable `min`/`max` or `max-N` offset (bounds/domain violations, missing numeric domain, malformed/ambiguous forms).
+- Unresolvable/invalid derived placeholders in `report_sheet` (including offset/domain failures) where required.
 - No valid selectable data/values where required by processing rules.
 
 Errors are raised with contextual diagnostics in the implementation.

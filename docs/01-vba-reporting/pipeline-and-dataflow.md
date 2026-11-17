@@ -50,10 +50,11 @@ High-level implemented sequence (`modTreportRun.Create_report` / `ProcessDataFil
 3. Create one output workbook per report and maintain per-output-workbook sheet-name tracking.
 4. For each `data_files` row in order:
    - Resolve source workbook and open read-only.
-   - Parse/classify `data_files.filters`, resolve min/max/year/period context, and apply data-file filters once per source.
-   - For each report row: apply report-level filters, verify data presence, derive/substitute `report_sheet` name, enforce sheet-name collision rules, create/add report sheet, extract/copy pivot snapshot, and apply sheet formatting.
+   - Parse/classify `data_files.filters` (including supported `max-N` offset bounds/values), resolve min/max/year/period context against pre-resolved per-field numeric domain, and apply data-file filters once per source.
+   - Resolve `report_sheet` `max` placeholders for the row pre-filter and independently of `data_files.filters` (including `<max-N_<field>>` with D1/D2 rules).
+   - For each report row: apply report-level filters, verify data presence, derive/substitute `report_sheet` name, enforce sheet-name collision rules, create/add report sheet, extract/copy pivot snapshot, apply sheet formatting, and apply bounds-scoped Outline row grouping when configured/valid (`group_rows`, `general.rows_collapsed`).
    - Close source workbook without save.
-5. Save output workbooks (overwrite-on-success intent) and close them.
+5. Remove Excel-default empty sheets from each produced output workbook only on normal successful completion paths (guarded to never delete produced report sheets), enforce produced-sheet invariants, then save output workbooks (overwrite-on-success intent) and close them.
 6. Restore application state and report explicit outcome/status.
 
 ## Path Resolution and Output Readiness
@@ -81,17 +82,19 @@ High-level semantics as specified/implemented in exported modules (`modTreportPi
 ## Extraction and Static Assembly
 
 - Presented pivot data range is determined after filtering (`modTreportExtract`, preferring `TableRange1` with fallback behavior as implemented).
-- Snapshot is copied as static content: values and number formats, cell formats, column widths, and row heights (as implemented).
+- Snapshot is copied as static content: values and number formats, cell formats, column widths, and row heights (as implemented). The inserted/pasted range bounds are used for subsequent bounds-scoped processing.
 - Sheet formatting/layout steps include gridlines handling and optional freeze panes/zoom normalization.
-- **Verification note:** exact presented-range boundaries and visual/data fidelity (including exclusion of pivot/page-filter/PQ artifacts in all cases) are runtime-unverified.
+- **Row grouping (Outline):** when applicable, grouping is applied after paste/formatting within inserted/pasted bounds only, using `data_files.group_rows` (1-based relative column) and static-fill predicate (no fill/pattern none or solid white `RGB(255,255,255)`, conditional formatting ignored). Invalid/missing/out-of-width parameters are skipped for that subreport with explicit diagnostics (no fail-fast). Collapse state follows `general.rows_collapsed` (default expanded).
+- **Verification note:** exact presented-range boundaries and visual/data fidelity (including exclusion of pivot/page-filter/PQ artifacts in all cases) are runtime-unverified. Outline grouping/collapse behavior is implemented in exports but not fully runtime-verified in this audit.
 
 ## Output Workbooks and Sheets
 
 - One output workbook is created per `reports` row.
-- Sheets are produced in `data_files` order with `report_sheet` names after placeholder substitution and sanitization.
+- Sheets are produced in `data_files` order with `report_sheet` names after placeholder substitution and sanitization. `report_sheet` supports `<max_<field>>` and `<max-N_<field>>` placeholders resolved pre-filter and independently of `data_files.filters`.
+- Default Excel-empty sheets are removed from normally produced output workbooks on successful completion paths with guards that preserve produced report sheets and enforce invariants before save (fail-fast on invalid produced-sheet state as implemented).
 - Successful generation overwrites existing output artifacts as applicable (save semantics implemented in `modTreportOutput`).
 - **Sheet-name collisions (current exports):** collision tracking/checking is scoped per output workbook during `Create_report` processing (not a single global namespace across all output workbooks in the same run). This reflects current exported implementation; prior report history differed.
-- `group_rows` is deferred/no-op.
+- `group_rows` and `general.rows_collapsed` control bounds-scoped Outline grouping behavior as implemented (see [Configuration model](./configuration-model.md)); invalid grouping parameters are skipped per subreport with diagnostics.
 
 ## Validation, Diagnostics, and State Safety
 
