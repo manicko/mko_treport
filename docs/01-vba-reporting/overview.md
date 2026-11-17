@@ -31,16 +31,19 @@ Describes the treport VBA reporting subsystem: a configuration-driven Excel macr
 ## Scope and Boundaries
 
 **In scope (implemented/defined at high level):**
-- Reading and validating configuration from `settings` ListObjects.
+- Reading and validating configuration from `settings` ListObjects (including required workbook tables/fields and optional P04/P07 extension columns when present).
 - Resolving source workbooks, opening in appropriate access mode, and running refresh/report workflows.
-- Parsing/applying filter DSL and derived period/placeholder resolution.
+- Parsing/applying filter DSL and derived period/`report_sheet` placeholder resolution (including offset forms).
 - Applying pivot filters and extracting static report snapshots into output workbooks.
+- Preparing output target sheets (plain or `template`-based from `ThisWorkbook`), transferring snapshots (`only_values`, `skip_header`) with configurable insertion/row-preparation modes (`insert_rows`, including template-scoped rework semantics), and applying layout/formatting.
+- Bounds-scoped Outline row grouping driven by `data_files.group_rows` with `general.rows_collapsed` control.
+- Output workbook finalization (including removal of unproduced default sheets on successful completion paths with produced-sheet guards) and save/collision handling.
 - Deterministic validation/fail-fast diagnostics and application-state restore/cleanup intent.
 
 **Out of scope:**
 - External runtime services or non-VBA end-user execution dependencies.
 
-**P01 (current exports, runtime-unverified):** `data_files.filters` and `report_sheet` support `max-N` offsets with deterministic bounds/domain validation; produced output workbooks remove Excel-default empty sheets on successful completion paths with produced-sheet guards; and per-subreport, bounds-scoped Excel Outline row grouping is driven by `data_files.group_rows` with `general.rows_collapsed` control (invalid grouping parameters skipped with diagnostics). End-to-end behavior remains subject to manual L2 compile and L3 runtime verification on working copies.
+**Implemented extensions in current exports (P01/P04/P05/P07/P09, runtime-unverified):** `max-N` offsets in `data_files.filters` and `report_sheet` placeholders with deterministic bounds/domain validation; default-sheet cleanup with produced-sheet guards; template-based output sheets with `only_values`, `insert_rows` (legacy/non-template and template-scoped anchor rework) and `skip_header` snapshot handling; and `group_rows`/`rows_collapsed` Outline grouping. End-to-end behavior remains subject to manual L2 compile and L3 runtime verification on working copies (dataset-specific correctness, including `report_wclip` pivot/period semantics, not proven in this audit).
 
 ## Component Overview
 
