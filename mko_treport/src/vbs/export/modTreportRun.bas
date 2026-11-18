@@ -212,6 +212,7 @@ End Sub
 Private Sub CollectDataFilePlanMembers(ByRef cfg As modTreportConfig.TreportConfig, ByVal dfIdx As Long, ByVal wbSrc As Workbook, ByVal srcPath As String, ByVal fileCtx As String, ByRef outNames() As String, ByRef outPlanMembers() As Variant, ByRef emissionOrder As Long)
     ' RC-5 scan pass: open source read-only (caller), resolve placeholder max values once per df row before
     ' data_files.filters (equivalent basis), and collect per-emission member records without creating any report worksheet.
+    ' Uses Collection of member Dictionaries (keyed "1"..N) instead of UDT arrays to avoid VBA late-binding/Variant coercion issues.
     Dim ws As Worksheet
     Dim pt As PivotTable
     Dim placeholderMaxValues As Object
@@ -219,15 +220,14 @@ Private Sub CollectDataFilePlanMembers(ByRef cfg As modTreportConfig.TreportConf
     Dim repCtx As String
     Dim substituted As String
     Dim effectiveBase As String
-    Dim members() As modTreportOutput.B2SheetMemberPlan
-    Dim ub As Long
+    Dim members As Object
     Dim hasMembers As Boolean
+    Dim mi As Object
 
     Set ws = modTreportPivot.GetDataSheet(wbSrc, cfg.DataFiles(dfIdx).DataSheet, fileCtx & ",path='" & srcPath & "'")
     Set pt = modTreportPivot.GetPrimaryPivot(ws, fileCtx & ",path='" & srcPath & "'")
     Set placeholderMaxValues = ResolveReportSheetPlaceholderMaxValues(pt, cfg.DataFiles(dfIdx).ReportSheet, fileCtx)
 
-    ub = -1
     hasMembers = False
     For r = LBound(cfg.Reports) To UBound(cfg.Reports)
         emissionOrder = emissionOrder + 1
@@ -236,87 +236,93 @@ Private Sub CollectDataFilePlanMembers(ByRef cfg As modTreportConfig.TreportConf
         substituted = modTreportOutput.SubstituteReportSheetPlaceholders(cfg.DataFiles(dfIdx).ReportSheet, placeholderMaxValues, repCtx)
         effectiveBase = modTreportOutput.ResolveEffectiveBaseSheetName(substituted, repCtx & ",output='" & outNames(r) & "',parameter='report_sheet/data_sheet'", cfg.DataFiles(dfIdx).ReportSheet)
 
-        ub = ub + 1
         If Not hasMembers Then
-            ReDim members(0 To 0)
+            Set members = CreateObject("Scripting.Dictionary")
+            members.CompareMode = vbBinaryCompare
             hasMembers = True
-        Else
-            ReDim Preserve members(0 To ub)
         End If
 
-        members(ub).ReportIndex = r
-        members(ub).DataFileIndex = dfIdx
-        members(ub).DataFileRowIndex = cfg.DataFiles(dfIdx).RowIndex
-        members(ub).EmissionOrder = emissionOrder
-        members(ub).GapRows = cfg.DataFiles(dfIdx).gapRows
-        members(ub).EffectiveBaseName = effectiveBase
-        members(ub).GroupKey = modTreportOutput.MakeSheetGroupKey(effectiveBase)
-        members(ub).PlannedName = vbNullString
-        members(ub).SuffixText = vbNullString
-        members(ub).SuffixLength = 0
-        members(ub).OutputName = outNames(r)
-        members(ub).ReportName = cfg.Reports(r).Name
-        members(ub).FileCtx = fileCtx
-        members(ub).RepCtx = repCtx
-        members(ub).RawReportSheetTemplate = cfg.DataFiles(dfIdx).ReportSheet
+        Set mi = CreateObject("Scripting.Dictionary")
+        mi.CompareMode = vbBinaryCompare
+        mi.Add "ReportIndex", r
+        mi.Add "DataFileIndex", dfIdx
+        mi.Add "DataFileRowIndex", cfg.DataFiles(dfIdx).RowIndex
+        mi.Add "EmissionOrder", emissionOrder
+        mi.Add "GapRows", cfg.DataFiles(dfIdx).gapRows
+        mi.Add "EffectiveBaseName", effectiveBase
+        mi.Add "GroupKey", modTreportOutput.MakeSheetGroupKey(effectiveBase)
+        mi.Add "PlannedName", vbNullString
+        mi.Add "SuffixText", vbNullString
+        mi.Add "SuffixLength", 0
+        mi.Add "OutputName", outNames(r)
+        mi.Add "ReportName", cfg.Reports(r).Name
+        mi.Add "FileCtx", fileCtx
+        mi.Add "RepCtx", repCtx
+        mi.Add "RawReportSheetTemplate", cfg.DataFiles(dfIdx).ReportSheet
+
+        members.Add CStr(members.Count + 1), mi
+        Set mi = Nothing
     Next r
 
     If hasMembers Then
-        outPlanMembers(dfIdx) = members
+        Set outPlanMembers(dfIdx) = members
     Else
         outPlanMembers(dfIdx) = Empty
     End If
 End Sub
 
-Private Sub AppendReportMembers(ByRef allMembers() As modTreportOutput.B2SheetMemberPlan, ByRef hasAll As Boolean, ByRef dfMembers() As modTreportOutput.B2SheetMemberPlan, ByVal reportIdx As Long)
+Private Sub AppendReportMembers(ByVal allMembers As Object, ByVal dfMembers As Object, ByVal reportIdx As Long)
     Dim i As Long
-    Dim ub As Long
-    For i = LBound(dfMembers) To UBound(dfMembers)
-        If dfMembers(i).ReportIndex = reportIdx Then
-            If Not hasAll Then
-                ReDim allMembers(0 To 0)
-                hasAll = True
-                ub = 0
-            Else
-                ub = UBound(allMembers) + 1
-                ReDim Preserve allMembers(0 To ub)
-            End If
-            allMembers(UBound(allMembers)) = dfMembers(i)
+    Dim mi As Object
+    If dfMembers Is Nothing Then Exit Sub
+    For i = 1 To dfMembers.Count
+        Set mi = dfMembers(CStr(i))
+        If CLng(mi("ReportIndex")) = reportIdx Then
+            allMembers.Add CStr(allMembers.Count + 1), mi
         End If
+        Set mi = Nothing
     Next i
 End Sub
 
 Private Sub BuildOutputPlan(ByVal reportIdx As Long, ByRef dfMembersByDf As Variant, ByVal groupsByKey As Object, ByVal plannedNames As Object)
     ' Build per-output plan in original data_files/emission order across all df rows for this report.
-    Dim allMembers() As modTreportOutput.B2SheetMemberPlan
-    Dim hasAll As Boolean
+    ' Member records are Dictionaries (not UDTs) to support cross-module planning and runtime enrichment.
+    Dim allMembers As Object
     Dim i As Long
-    Dim members() As modTreportOutput.B2SheetMemberPlan
+    Dim dfMembers As Object
     Dim gk As Variant
     Dim grp As Object
     Dim coll As Object
     Dim j As Long
-    Dim groupMembers() As modTreportOutput.B2SheetMemberPlan
+    Dim groupMembers As Object
     Dim mi As Object
 
-    hasAll = False
+    Set allMembers = CreateObject("Scripting.Dictionary")
+    allMembers.CompareMode = vbBinaryCompare
+
     For i = LBound(dfMembersByDf) To UBound(dfMembersByDf)
         If IsEmpty(dfMembersByDf(i)) Then GoTo ContinueDf
-        members = dfMembersByDf(i)
-        AppendReportMembers allMembers, hasAll, members, reportIdx
+        If IsObject(dfMembersByDf(i)) Then
+            Set dfMembers = dfMembersByDf(i)
+        Else
+            GoTo ContinueDf
+        End If
+        AppendReportMembers allMembers, dfMembers, reportIdx
+        Set dfMembers = Nothing
 ContinueDf:
     Next i
 
-    If Not hasAll Then Exit Sub
+    If allMembers.Count = 0 Then Exit Sub
 
     ' Stage 1 grouping seed in emission order, then assign planned names per group in that order.
-    For i = LBound(allMembers) To UBound(allMembers)
-        gk = allMembers(i).GroupKey
+    For i = 1 To allMembers.Count
+        Set mi = allMembers(CStr(i))
+        gk = CStr(mi("GroupKey"))
         If Not groupsByKey.Exists(CStr(gk)) Then
             Set grp = CreateObject("Scripting.Dictionary")
             grp.CompareMode = vbBinaryCompare
             grp.Add "Key", CStr(gk)
-            grp.Add "BaseName", allMembers(i).EffectiveBaseName
+            grp.Add "BaseName", CStr(mi("EffectiveBaseName"))
             Set coll = CreateObject("Scripting.Dictionary")
             coll.CompareMode = vbBinaryCompare
             grp.Add "Members", coll
@@ -324,22 +330,41 @@ ContinueDf:
         End If
         Set grp = groupsByKey(CStr(gk))
         Set coll = grp("Members")
-        coll.Add CStr(coll.Count + 1), i
+        coll.Add CStr(coll.Count + 1), mi
+        Set mi = Nothing
     Next i
 
     ' Assign suffix-aware planned names and validate lengths (2637) per group in original order.
     For Each gk In groupsByKey.Keys
         Set grp = groupsByKey(CStr(gk))
         Set coll = grp("Members")
-        ReDim groupMembers(0 To coll.Count - 1)
+        Set groupMembers = CreateObject("Scripting.Dictionary")
+        groupMembers.CompareMode = vbBinaryCompare
         For j = 1 To coll.Count
-            groupMembers(j - 1) = allMembers(CLng(coll(CStr(j))))
+            groupMembers.Add CStr(j), coll(CStr(j))
         Next j
         modTreportOutput.AssignPlannedSheetNames groupMembers
-        For j = 1 To coll.Count
-            allMembers(CLng(coll(CStr(j)))) = groupMembers(j - 1)
-        Next j
+        ' AssignPlannedSheetNames mutates member dictionaries in-place; coll holds same object references.
+        Set groupMembers = Nothing
     Next gk
+
+    ' Rebuild allMembers in original emission order from updated group member references for BuildOutputSheetPlan.
+    Set allMembers = CreateObject("Scripting.Dictionary")
+    allMembers.CompareMode = vbBinaryCompare
+    For i = LBound(dfMembersByDf) To UBound(dfMembersByDf)
+        If IsEmpty(dfMembersByDf(i)) Then GoTo ContinueDf2
+        If Not IsObject(dfMembersByDf(i)) Then GoTo ContinueDf2
+        Set dfMembers = dfMembersByDf(i)
+        For j = 1 To dfMembers.Count
+            Set mi = dfMembers(CStr(j))
+            If CLng(mi("ReportIndex")) = reportIdx Then
+                allMembers.Add CStr(allMembers.Count + 1), mi
+            End If
+            Set mi = Nothing
+        Next j
+        Set dfMembers = Nothing
+ContinueDf2:
+    Next i
 
     ' Build final planned-name map and replace group member payloads with cloned plan info dictionaries.
     groupsByKey.RemoveAll
@@ -357,7 +382,8 @@ Private Sub BuildOutputRuntimeScaffolding(ByVal reportIdx As Long, ByRef dfMembe
     Dim hasOrder As Boolean
     Dim seen As Object
     Dim i As Long, j As Long
-    Dim members() As modTreportOutput.B2SheetMemberPlan
+    Dim members As Object
+    Dim miScan As Object
     Dim gk As String
     Dim grp As Object
     Dim coll As Object
@@ -373,16 +399,20 @@ Private Sub BuildOutputRuntimeScaffolding(ByVal reportIdx As Long, ByRef dfMembe
     ' First-seen group order for this output in original df/report emission order.
     For i = LBound(dfMembersByDf) To UBound(dfMembersByDf)
         If IsEmpty(dfMembersByDf(i)) Then GoTo ContinueDfOrder
-        members = dfMembersByDf(i)
-        For j = LBound(members) To UBound(members)
-            If members(j).ReportIndex <> reportIdx Then GoTo ContinueMemberOrder
-            gk = members(j).GroupKey
+        If Not IsObject(dfMembersByDf(i)) Then GoTo ContinueDfOrder
+        Set members = dfMembersByDf(i)
+        For j = 1 To members.Count
+            Set miScan = members(CStr(j))
+            If CLng(miScan("ReportIndex")) <> reportIdx Then GoTo ContinueMemberOrder
+            gk = CStr(miScan("GroupKey"))
             If Not seen.Exists(gk) Then
                 seen.Add gk, True
                 AppendStringToVariantArray order, hasOrder, gk
             End If
 ContinueMemberOrder:
+            Set miScan = Nothing
         Next j
+        Set members = Nothing
 ContinueDfOrder:
     Next i
 
@@ -395,32 +425,37 @@ ContinueDfOrder:
     ' Enrich runtime member dicts in B2 group member collections and build emission/member-aware lookup.
     For i = LBound(dfMembersByDf) To UBound(dfMembersByDf)
         If IsEmpty(dfMembersByDf(i)) Then GoTo ContinueDfLookup
-        members = dfMembersByDf(i)
-        For j = LBound(members) To UBound(members)
-            If members(j).ReportIndex <> reportIdx Then GoTo ContinueMemberLookup
-            gk = members(j).GroupKey
+        If Not IsObject(dfMembersByDf(i)) Then GoTo ContinueDfLookup
+        Set members = dfMembersByDf(i)
+        For j = 1 To members.Count
+            Set miScan = members(CStr(j))
+            If CLng(miScan("ReportIndex")) <> reportIdx Then GoTo ContinueMemberLookup
+            gk = CStr(miScan("GroupKey"))
             If Not groupsByKey.Exists(gk) Then
-                modTreportConfig.Fail 2698, "Create_report/runtime_scaffold[output='" & outputName & "',report_index=" & CStr(reportIdx) & ",data_file_index=" & CStr(members(j).DataFileIndex) & ",report_row=" & CStr(members(j).ReportIndex) & "]", _
+                modTreportConfig.Fail 2698, "Create_report/runtime_scaffold[output='" & outputName & "',report_index=" & CStr(reportIdx) & ",data_file_index=" & CStr(CLng(miScan("DataFileIndex"))) & ",report_row=" & CStr(CLng(miScan("ReportIndex"))) & "]", _
                     "Internal runtime state error: B2 group not found for planned member."
             End If
             Set grp = groupsByKey(gk)
             Set coll = grp("Members")
-            Set mi = FindGroupMemberByEmission(coll, CLng(members(j).EmissionOrder))
+            Set mi = FindGroupMemberByEmission(coll, CLng(miScan("EmissionOrder")))
             If mi Is Nothing Then
-                modTreportConfig.Fail 2698, "Create_report/runtime_scaffold[output='" & outputName & "',emission_order=" & CStr(members(j).EmissionOrder) & "]", _
+                modTreportConfig.Fail 2698, "Create_report/runtime_scaffold[output='" & outputName & "',emission_order=" & CStr(CLng(miScan("EmissionOrder"))) & "]", _
                     "Internal runtime state error: B2 group member not found for emission."
             End If
 
             ' Deterministic base/temp identity from B2 member order (1-based in group collection).
             EnsureMemberRuntimeFields mi, grp, outputName
-            memberKey = MemberLookupKey(CLng(members(j).DataFileIndex), CLng(members(j).ReportIndex))
+            memberKey = MemberLookupKey(CLng(miScan("DataFileIndex")), CLng(miScan("ReportIndex")))
             If lookup.Exists(memberKey) Then
-                modTreportConfig.Fail 2698, "Create_report/runtime_scaffold[output='" & outputName & "',data_file_index=" & CStr(members(j).DataFileIndex) & ",report_index=" & CStr(members(j).ReportIndex) & "]", _
+                modTreportConfig.Fail 2698, "Create_report/runtime_scaffold[output='" & outputName & "',data_file_index=" & CStr(CLng(miScan("DataFileIndex"))) & ",report_index=" & CStr(CLng(miScan("ReportIndex"))) & "]", _
                     "Internal runtime state error: duplicate emission/member lookup key."
             End If
             lookup.Add memberKey, mi
 ContinueMemberLookup:
+            Set miScan = Nothing
+            Set mi = Nothing
         Next j
+        Set members = Nothing
 ContinueDfLookup:
     Next i
 
@@ -516,7 +551,9 @@ Private Sub ExecuteDataFilePlannedMembers(ByRef cfg As modTreportConfig.TreportC
     Dim lookup As Object
     Dim memberKey As String
     Dim mi As Object
+    Dim miPlan As Object
     Dim isBase As Boolean
+    Dim membersDf As Variant
 
     If IsEmpty(outMemberLookup(LBound(outMemberLookup))) And LBound(outMemberLookup) = UBound(outMemberLookup) Then
         ' no-op guard not reliable for arrays; continue with normal checks per report

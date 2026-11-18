@@ -570,60 +570,93 @@ Public Function MakeSheetGroupKey(ByVal effectiveBaseName As String) As String
     MakeSheetGroupKey = LCase$(effectiveBaseName)
 End Function
 
-Private Function B2PlanningContext(ByRef m As B2SheetMemberPlan) As String
+Private Function B2MemberStr(ByVal m As Object, ByVal key As String) As String
+    On Error Resume Next
+    If m Is Nothing Then
+        B2MemberStr = vbNullString
+    ElseIf m.Exists(key) Then
+        B2MemberStr = CStr(m(key))
+    Else
+        B2MemberStr = vbNullString
+    End If
+    If Err.Number <> 0 Then B2MemberStr = vbNullString
+    On Error GoTo 0
+End Function
+
+Private Function B2MemberLong(ByVal m As Object, ByVal key As String) As Long
+    On Error Resume Next
+    If m Is Nothing Then
+        B2MemberLong = 0
+    ElseIf m.Exists(key) Then
+        B2MemberLong = CLng(m(key))
+    Else
+        B2MemberLong = 0
+    End If
+    If Err.Number <> 0 Then B2MemberLong = 0
+    On Error GoTo 0
+End Function
+
+Private Function B2PlanningContext(ByVal m As Object) As String
     Dim c As String
-    c = m.RepCtx
-    If Len(m.OutputName) > 0 Then c = c & ",output='" & m.OutputName & "'"
-    If m.ReportIndex > 0 Then c = c & ",report_index=" & CStr(m.ReportIndex)
-    If Len(m.ReportName) > 0 Then c = c & ",report_name='" & m.ReportName & "'"
-    If m.DataFileIndex > 0 Then c = c & ",data_file_index=" & CStr(m.DataFileIndex)
-    If m.DataFileRowIndex > 0 Then c = c & ",data_file_row=" & CStr(m.DataFileRowIndex)
-    If Len(m.RawReportSheetTemplate) > 0 Then c = c & ",raw_report_sheet_template='" & m.RawReportSheetTemplate & "'"
+    c = B2MemberStr(m, "RepCtx")
+    If Len(B2MemberStr(m, "OutputName")) > 0 Then c = c & ",output='" & B2MemberStr(m, "OutputName") & "'"
+    If B2MemberLong(m, "ReportIndex") > 0 Then c = c & ",report_index=" & CStr(B2MemberLong(m, "ReportIndex"))
+    If Len(B2MemberStr(m, "ReportName")) > 0 Then c = c & ",report_name='" & B2MemberStr(m, "ReportName") & "'"
+    If B2MemberLong(m, "DataFileIndex") > 0 Then c = c & ",data_file_index=" & CStr(B2MemberLong(m, "DataFileIndex"))
+    If B2MemberLong(m, "DataFileRowIndex") > 0 Then c = c & ",data_file_row=" & CStr(B2MemberLong(m, "DataFileRowIndex"))
+    If Len(B2MemberStr(m, "RawReportSheetTemplate")) > 0 Then c = c & ",raw_report_sheet_template='" & B2MemberStr(m, "RawReportSheetTemplate") & "'"
     B2PlanningContext = c
 End Function
 
-Private Sub FailPlannedSheetNameLength(ByRef m As B2SheetMemberPlan)
+Private Sub FailPlannedSheetNameLength(ByVal m As Object)
     ' 2637 (D-04/CR-19n..21n): planning-validated worksheet-name length violation.
     ' Required: effective base name (without numeric suffix), explicit max permitted base length (31 - suffix_length),
     ' suffix_length/suffix and concrete planned name, output/report/data_file/row context; raw template optional.
     Dim maxBaseLen As Long
+    Dim suffixLen As Long
     Dim msg As String
-    maxBaseLen = 31 - m.SuffixLength
+    suffixLen = B2MemberLong(m, "SuffixLength")
+    maxBaseLen = 31 - suffixLen
     If maxBaseLen < 0 Then maxBaseLen = 0
     msg = "Planned worksheet name exceeds 31 characters (D-04). " & _
-          "Effective base name after substitution/sanitization without numeric suffix: '" & m.EffectiveBaseName & "'. " & _
+          "Effective base name after substitution/sanitization without numeric suffix: '" & B2MemberStr(m, "EffectiveBaseName") & "'. " & _
           "Maximum permitted base-name length (31 - suffix_length): " & CStr(maxBaseLen) & ". " & _
-          "suffix_length=" & CStr(m.SuffixLength) & ", suffix='" & m.SuffixText & "'. " & _
-          "Concrete planned worksheet name: '" & m.PlannedName & "'."
+          "suffix_length=" & CStr(suffixLen) & ", suffix='" & B2MemberStr(m, "SuffixText") & "'. " & _
+          "Concrete planned worksheet name: '" & B2MemberStr(m, "PlannedName") & "'."
     modTreportConfig.Fail 2637, B2PlanningContext(m), msg
 End Sub
 
-Public Sub AssignPlannedSheetNames(ByRef members() As B2SheetMemberPlan)
+Public Sub AssignPlannedSheetNames(ByVal members As Object)
     ' OQ-7/CR-05/D-04: base for first member, then base1..base(N-1) in original member order.
-    ' Uses actual suffix length when validating (suffix_length >= 0, including multi-digit).
+    ' members: Collection keyed "1"..N (ordered) of member Dictionaries. Mutates SuffixText/SuffixLength/PlannedName.
     Dim i As Long
-    Dim lb As Long, ub As Long
-    lb = LBound(members)
-    ub = UBound(members)
-    For i = lb To ub
-        If i = lb Then
-            members(i).SuffixText = vbNullString
-            members(i).SuffixLength = 0
-            members(i).PlannedName = members(i).EffectiveBaseName
+    Dim count As Long
+    Dim m As Object
+    Dim baseName As String
+    count = members.Count
+    For i = 1 To count
+        Set m = members(CStr(i))
+        baseName = B2MemberStr(m, "EffectiveBaseName")
+        If i = 1 Then
+            m("SuffixText") = vbNullString
+            m("SuffixLength") = 0
+            m("PlannedName") = baseName
         Else
-            members(i).SuffixText = CStr(i - lb)
-            members(i).SuffixLength = Len(members(i).SuffixText)
-            members(i).PlannedName = members(i).EffectiveBaseName & members(i).SuffixText
+            m("SuffixText") = CStr(i - 1)
+            m("SuffixLength") = Len(CStr(m("SuffixText")))
+            m("PlannedName") = baseName & CStr(m("SuffixText"))
         End If
-        If Len(members(i).PlannedName) > 31 Then
-            FailPlannedSheetNameLength members(i)
+        If Len(B2MemberStr(m, "PlannedName")) > 31 Then
+            FailPlannedSheetNameLength m
         End If
+        Set m = Nothing
     Next i
 End Sub
 
-Public Sub BuildOutputSheetPlan(ByRef members() As B2SheetMemberPlan, ByRef groupsByKey As Object, ByRef plannedNames As Object)
+Public Sub BuildOutputSheetPlan(ByVal membersInOrder As Object, ByRef groupsByKey As Object, ByRef plannedNames As Object)
     ' Builds per-output grouping plan and all planned-name map in original member order.
-    ' groupsByKey: key=LCase effective base -> Dictionary with Keys: Key, BaseName, Members(Collection in order)
+    ' membersInOrder: Collection keyed "1"..N of member Dictionaries with EffectiveBaseName/GroupKey/PlannedName/EmissionOrder/contexts set.
+    ' groupsByKey: key=LCase effective base -> Dictionary with Keys: Key, BaseName, Members(Collection "1"..N in order)
     ' plannedNames: key=LCase planned name -> Dictionary info for diagnostics/preflight.
     Dim i As Long
     Dim gk As String
@@ -631,14 +664,16 @@ Public Sub BuildOutputSheetPlan(ByRef members() As B2SheetMemberPlan, ByRef grou
     Dim coll As Object
     Dim info As Object
     Dim pnKey As String
+    Dim m As Object
 
-    For i = LBound(members) To UBound(members)
-        gk = members(i).GroupKey
+    For i = 1 To membersInOrder.Count
+        Set m = membersInOrder(CStr(i))
+        gk = B2MemberStr(m, "GroupKey")
         If Not groupsByKey.Exists(gk) Then
             Set grp = CreateObject("Scripting.Dictionary")
             grp.CompareMode = vbBinaryCompare
             grp.Add "Key", gk
-            grp.Add "BaseName", members(i).EffectiveBaseName
+            grp.Add "BaseName", B2MemberStr(m, "EffectiveBaseName")
             Set coll = CreateObject("Scripting.Dictionary")
             coll.CompareMode = vbBinaryCompare
             grp.Add "Members", coll
@@ -648,44 +683,45 @@ Public Sub BuildOutputSheetPlan(ByRef members() As B2SheetMemberPlan, ByRef grou
             Set coll = grp("Members")
         End If
         Set coll = grp("Members")
-        coll.Add CStr(coll.Count + 1), CloneB2MemberInfo(members(i))
+        coll.Add CStr(coll.Count + 1), CloneB2MemberInfo(m)
 
-        pnKey = LCase$(members(i).PlannedName)
+        pnKey = LCase$(B2MemberStr(m, "PlannedName"))
         Set info = CreateObject("Scripting.Dictionary")
         info.CompareMode = vbBinaryCompare
-        info.Add "PlannedName", members(i).PlannedName
+        info.Add "PlannedName", B2MemberStr(m, "PlannedName")
         info.Add "GroupKey", gk
-        info.Add "BaseName", members(i).EffectiveBaseName
-        info.Add "Context", B2PlanningContext(members(i))
-        info.Add "MemberOrder", CStr(members(i).EmissionOrder)
+        info.Add "BaseName", B2MemberStr(m, "EffectiveBaseName")
+        info.Add "Context", B2PlanningContext(m)
+        info.Add "MemberOrder", CStr(B2MemberLong(m, "EmissionOrder"))
         If plannedNames.Exists(pnKey) Then
             ' Duplicate planned name in current run: fail as collision preflight (2638).
-            FailPlannedNameCollision members(i).PlannedName, "planned in current run", CStr(plannedNames(pnKey)("Context")), _
-                                     "planned in current run", B2PlanningContext(members(i))
+            FailPlannedNameCollision B2MemberStr(m, "PlannedName"), "planned in current run", CStr(plannedNames(pnKey)("Context")), _
+                                     "planned in current run", B2PlanningContext(m)
         End If
         plannedNames.Add pnKey, info
+        Set m = Nothing
     Next i
 End Sub
 
-Private Function CloneB2MemberInfo(ByRef m As B2SheetMemberPlan) As Object
+Public Function CloneB2MemberInfo(ByVal m As Object) As Object
     Dim d As Object
     Set d = CreateObject("Scripting.Dictionary")
     d.CompareMode = vbBinaryCompare
-    d.Add "ReportIndex", m.ReportIndex
-    d.Add "DataFileIndex", m.DataFileIndex
-    d.Add "DataFileRowIndex", m.DataFileRowIndex
-    d.Add "EmissionOrder", m.EmissionOrder
-    d.Add "GapRows", m.GapRows
-    d.Add "EffectiveBaseName", m.EffectiveBaseName
-    d.Add "GroupKey", m.GroupKey
-    d.Add "PlannedName", m.PlannedName
-    d.Add "SuffixText", m.SuffixText
-    d.Add "SuffixLength", m.SuffixLength
-    d.Add "OutputName", m.OutputName
-    d.Add "ReportName", m.ReportName
-    d.Add "FileCtx", m.FileCtx
-    d.Add "RepCtx", m.RepCtx
-    d.Add "RawReportSheetTemplate", m.RawReportSheetTemplate
+    d.Add "ReportIndex", B2MemberLong(m, "ReportIndex")
+    d.Add "DataFileIndex", B2MemberLong(m, "DataFileIndex")
+    d.Add "DataFileRowIndex", B2MemberLong(m, "DataFileRowIndex")
+    d.Add "EmissionOrder", B2MemberLong(m, "EmissionOrder")
+    d.Add "GapRows", B2MemberLong(m, "GapRows")
+    d.Add "EffectiveBaseName", B2MemberStr(m, "EffectiveBaseName")
+    d.Add "GroupKey", B2MemberStr(m, "GroupKey")
+    d.Add "PlannedName", B2MemberStr(m, "PlannedName")
+    d.Add "SuffixText", B2MemberStr(m, "SuffixText")
+    d.Add "SuffixLength", B2MemberLong(m, "SuffixLength")
+    d.Add "OutputName", B2MemberStr(m, "OutputName")
+    d.Add "ReportName", B2MemberStr(m, "ReportName")
+    d.Add "FileCtx", B2MemberStr(m, "FileCtx")
+    d.Add "RepCtx", B2MemberStr(m, "RepCtx")
+    d.Add "RawReportSheetTemplate", B2MemberStr(m, "RawReportSheetTemplate")
     Set CloneB2MemberInfo = d
 End Function
 
@@ -787,13 +823,20 @@ Public Function DescribeCombineGroups(ByVal groupsByKey As Object, ByVal outputN
     DescribeCombineGroups = parts
 End Function
 
-Public Function GetPlannedSheetNameForMember(ByRef members() As B2SheetMemberPlan, ByVal emissionOrder As Long) As String
+Public Function GetPlannedSheetNameForMember(ByVal membersInOrder As Object, ByVal emissionOrder As Long) As String
     Dim i As Long
-    For i = LBound(members) To UBound(members)
-        If members(i).EmissionOrder = emissionOrder Then
-            GetPlannedSheetNameForMember = members(i).PlannedName
+    Dim m As Object
+    If membersInOrder Is Nothing Then
+        GetPlannedSheetNameForMember = vbNullString
+        Exit Function
+    End If
+    For i = 1 To membersInOrder.Count
+        Set m = membersInOrder(CStr(i))
+        If B2MemberLong(m, "EmissionOrder") = emissionOrder Then
+            GetPlannedSheetNameForMember = B2MemberStr(m, "PlannedName")
             Exit Function
         End If
+        Set m = Nothing
     Next i
     GetPlannedSheetNameForMember = vbNullString
 End Function
