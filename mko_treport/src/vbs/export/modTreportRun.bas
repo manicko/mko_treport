@@ -3,6 +3,8 @@ Option Explicit
 
 ' treport rev.6 run entry points (FR-RUN-1)
 ' Final runtime: Excel VBA only. Auxiliary dev tools must not be runtime dependencies.
+' B3 (P01): RC-5 scan/build/preflight preserved; RC-1 2699 gate removed with Stage 1 preparation for all members
+' and B4/B5 orchestration hooks. outPlanNames = planned/reserved; outUsedSheetNames = final/base-produced only.
 
 Private Const ERR_FILTER_NO_DATA As Long = 2410 + vbObjectError
 
@@ -78,8 +80,9 @@ Public Sub Create_report()
     Dim outPlanGroups() As Variant
     Dim outPlanNames() As Variant
     Dim planCtx As String
-    Dim combineMsg As String
     Dim emissionOrder As Long
+    Dim outGroupOrder() As Variant
+    Dim outMemberLookup() As Variant
 
     st = modTreportState.CaptureState()
     On Error GoTo EH
@@ -97,10 +100,12 @@ Public Sub Create_report()
     ReDim outPlanMembers(LBound(cfg.DataFiles) To UBound(cfg.DataFiles))
     ReDim outPlanGroups(LBound(cfg.Reports) To UBound(cfg.Reports))
     ReDim outPlanNames(LBound(cfg.Reports) To UBound(cfg.Reports))
+    ReDim outGroupOrder(LBound(cfg.Reports) To UBound(cfg.Reports))
+    ReDim outMemberLookup(LBound(cfg.Reports) To UBound(cfg.Reports))
 
     ' RC-5: output workbook objects may be available for inspection, but no planned report worksheets
     ' are created before complete per-run/per-output plan set is resolved, length-validated, and
-    ' collision-preflighted (full scan -> build/preflight all plans -> RC-1 gate -> execution/save).
+    ' collision-preflighted (full scan -> build/preflight all plans -> runtime scaffolding -> Stage 1 -> Stage 2 hooks -> save).
     Set dictNames = CreateObject("Scripting.Dictionary")
     dictNames.CompareMode = vbBinaryCompare
     For r = LBound(cfg.Reports) To UBound(cfg.Reports)
@@ -111,13 +116,15 @@ Public Sub Create_report()
         dictNames.Add LCase$(rn), True
         outNames(r) = rn
         Set outBooks(r) = Application.Workbooks.Add(xlWBATWorksheet)
-        ' RC-3: final-produced registry consumed by 2630/CleanupDefaultSheets/EnsureProducedSheetsPresent/save checks.
+        ' RC-3 / B3: final/base-produced registry only (2630/CleanupDefaultSheets/EnsureProducedSheetsPresent/save). Temps never registered.
         Set outUsedSheetNames(r) = CreateObject("Scripting.Dictionary")
         outUsedSheetNames(r).CompareMode = vbBinaryCompare
         Set outPlanGroups(r) = CreateObject("Scripting.Dictionary")
         outPlanGroups(r).CompareMode = vbBinaryCompare
         Set outPlanNames(r) = CreateObject("Scripting.Dictionary")
         outPlanNames(r).CompareMode = vbBinaryCompare
+        Set outGroupOrder(r) = Nothing
+        Set outMemberLookup(r) = Nothing
     Next r
 
     ' RC-5 full data_files scan (no report worksheet creation): resolve placeholder max values per df row
@@ -140,26 +147,34 @@ Public Sub Create_report()
         modTreportOutput.PreflightPlannedSheetNameCollisions outBooks(r), outPlanNames(r), planCtx
     Next r
 
-    ' RC-1 gate: if any group has GroupSize > 1, fail-fast before creating any Stage 1 report worksheet.
-    combineMsg = BuildCombineGateMessage(outPlanGroups, outNames, LBound(cfg.Reports), UBound(cfg.Reports))
-    If Len(combineMsg) > 0 Then
-        modTreportConfig.Fail 2699, "Create_report/plan/preflight", _
-            "P01 combine groups detected (GroupSize > 1). B3/B4/B5 combine implementation is required before any report worksheet can be created. " & combineMsg
-    End If
+    ' B3 runtime scaffolding: deterministic group order (first-seen emission) and emission/member-aware lookup.
+    ' RC-1 2699 combine-group gate removed and replaced by Stage 1 preparation for all members + B4/B5 hooks.
+    For r = LBound(cfg.Reports) To UBound(cfg.Reports)
+        BuildOutputRuntimeScaffolding r, outPlanMembers, outPlanGroups(r), outGroupOrder(r), outMemberLookup(r), outNames(r)
+    Next r
 
-    ' RC-2/RC-3: all groups are single-member -> execute Stage 1 semantics in original order with B2-assigned names.
+    ' Stage 1 (B3): prepare all planned members (single-member and combine groups) on B2-assigned sheets.
+    ' Preserves Stage 1 semantics/order/contexts: reopen source read-only per df, df filters once, per-report filters,
+    ' 2410, placement, PrepareTargetSheet, CopyPivotSnapshot, ApplySheetFormatting, ApplyOutlineGrouping.
+    ' Registers only base/final members in outUsedSheetNames(r); temps remain runtime-only.
     For i = LBound(cfg.DataFiles) To UBound(cfg.DataFiles)
         fileCtx = "Create_report[data_file='" & cfg.DataFiles(i).DataFile & "',row=" & cfg.DataFiles(i).RowIndex & ",sheet='" & cfg.DataFiles(i).DataSheet & "']"
         Application.StatusBar = "treport: " & fileCtx
         srcPath = modTreportFiles.ResolveDataFilePath(inputFolder, cfg.DataFiles(i).DataFile)
         Set wbSrc = modTreportFiles.OpenWorkbookReadOnly(srcPath)
-        ExecuteDataFileSingleMember cfg, i, wbSrc, srcPath, fileCtx, outBooks, outNames, outPlanMembers, outUsedSheetNames
+        ExecuteDataFilePlannedMembers cfg, i, wbSrc, srcPath, fileCtx, outBooks, outNames, outUsedSheetNames, outMemberLookup
         modTreportFiles.CloseNoSave wbSrc
         Set wbSrc = Nothing
     Next i
 
+    ' Stage 2 (B3 orchestration): B4 combine hook per combine group, then B5 finalization hook only after B4 success.
+    ' Hooks are fail-fast-before-save stubs until B4/B5 implemented; EH closes outputs without save.
+    For r = LBound(cfg.Reports) To UBound(cfg.Reports)
+        ExecuteOutputStage2Hooks r, outBooks(r), outNames(r), outPlanGroups(r), outGroupOrder(r), outUsedSheetNames(r), cfg.General.reportRowsLimitGeneral
+    Next r
+
     ' save outputs (B1/CR-1,D3): cleanup unproduced default sheets on successful normal-completion path only,
-    ' with produced-sheet guards and pre/post invariants before save.
+    ' with produced-sheet guards and pre/post invariants before save. Temps must be absent and unregistered.
     For r = LBound(cfg.Reports) To UBound(cfg.Reports)
         ctx = "Create_report/save[name='" & outNames(r) & "',report_row=" & cfg.Reports(r).RowIndex & "]"
         If Not outBooks(r) Is Nothing Then
@@ -331,44 +346,181 @@ ContinueDf:
     modTreportOutput.BuildOutputSheetPlan allMembers, groupsByKey, plannedNames
 End Sub
 
-Private Function BuildCombineGateMessage(ByRef outPlanGroups() As Variant, ByRef outNames() As String, ByVal lb As Long, ByVal ub As Long) As String
-    Dim r As Long
-    Dim msg As String
-    Dim part As String
-    msg = vbNullString
-    For r = lb To ub
-        If modTreportOutput.HasCombineGroups(outPlanGroups(r)) Then
-            part = modTreportOutput.DescribeCombineGroups(outPlanGroups(r), outNames(r))
-            If Len(msg) = 0 Then
-                msg = part
-            Else
-                msg = msg & " || " & part
+' B3: RC-1 2699 gate removed; combine groups are handled by Stage 1 preparation for all members and B4/B5 hooks.
+' HasCombineGroups/DescribeCombineGroups remain available in modTreportOutput for diagnostics/reporting as needed.
+
+Private Sub BuildOutputRuntimeScaffolding(ByVal reportIdx As Long, ByRef dfMembersByDf As Variant, ByVal groupsByKey As Object, ByRef outGroupOrder As Variant, ByRef outMemberLookup As Variant, ByVal outputName As String)
+    ' B3: build deterministic group order (first-seen emission order) and emission/member-aware runtime lookup.
+    ' Enriches group member dicts (B2 CloneB2MemberInfo payloads) with runtime fields; does not rely on Dictionary enumeration order.
+    Dim lookup As Object
+    Dim order() As String
+    Dim hasOrder As Boolean
+    Dim seen As Object
+    Dim i As Long, j As Long
+    Dim members() As modTreportOutput.B2SheetMemberPlan
+    Dim gk As String
+    Dim grp As Object
+    Dim coll As Object
+    Dim mi As Object
+    Dim memberKey As String
+
+    Set lookup = CreateObject("Scripting.Dictionary")
+    lookup.CompareMode = vbBinaryCompare
+    Set seen = CreateObject("Scripting.Dictionary")
+    seen.CompareMode = vbBinaryCompare
+    hasOrder = False
+
+    ' First-seen group order for this output in original df/report emission order.
+    For i = LBound(dfMembersByDf) To UBound(dfMembersByDf)
+        If IsEmpty(dfMembersByDf(i)) Then GoTo ContinueDfOrder
+        members = dfMembersByDf(i)
+        For j = LBound(members) To UBound(members)
+            If members(j).ReportIndex <> reportIdx Then GoTo ContinueMemberOrder
+            gk = members(j).GroupKey
+            If Not seen.Exists(gk) Then
+                seen.Add gk, True
+                AppendStringToVariantArray order, hasOrder, gk
             End If
-        End If
-    Next r
-    BuildCombineGateMessage = msg
+ContinueMemberOrder:
+        Next j
+ContinueDfOrder:
+    Next i
+
+    If hasOrder Then
+        outGroupOrder = order
+    Else
+        outGroupOrder = Empty
+    End If
+
+    ' Enrich runtime member dicts in B2 group member collections and build emission/member-aware lookup.
+    For i = LBound(dfMembersByDf) To UBound(dfMembersByDf)
+        If IsEmpty(dfMembersByDf(i)) Then GoTo ContinueDfLookup
+        members = dfMembersByDf(i)
+        For j = LBound(members) To UBound(members)
+            If members(j).ReportIndex <> reportIdx Then GoTo ContinueMemberLookup
+            gk = members(j).GroupKey
+            If Not groupsByKey.Exists(gk) Then
+                modTreportConfig.Fail 2698, "Create_report/runtime_scaffold[output='" & outputName & "',report_index=" & CStr(reportIdx) & ",data_file_index=" & CStr(members(j).DataFileIndex) & ",report_row=" & CStr(members(j).ReportIndex) & "]", _
+                    "Internal runtime state error: B2 group not found for planned member."
+            End If
+            Set grp = groupsByKey(gk)
+            Set coll = grp("Members")
+            Set mi = FindGroupMemberByEmission(coll, CLng(members(j).EmissionOrder))
+            If mi Is Nothing Then
+                modTreportConfig.Fail 2698, "Create_report/runtime_scaffold[output='" & outputName & "',emission_order=" & CStr(members(j).EmissionOrder) & "]", _
+                    "Internal runtime state error: B2 group member not found for emission."
+            End If
+
+            ' Deterministic base/temp identity from B2 member order (1-based in group collection).
+            EnsureMemberRuntimeFields mi, grp, outputName
+            memberKey = MemberLookupKey(CLng(members(j).DataFileIndex), CLng(members(j).ReportIndex))
+            If lookup.Exists(memberKey) Then
+                modTreportConfig.Fail 2698, "Create_report/runtime_scaffold[output='" & outputName & "',data_file_index=" & CStr(members(j).DataFileIndex) & ",report_index=" & CStr(members(j).ReportIndex) & "]", _
+                    "Internal runtime state error: duplicate emission/member lookup key."
+            End If
+            lookup.Add memberKey, mi
+ContinueMemberLookup:
+        Next j
+ContinueDfLookup:
+    Next i
+
+    Set outMemberLookup = lookup
+End Sub
+
+Private Sub AppendStringToVariantArray(ByRef arr() As String, ByRef hasItems As Boolean, ByVal value As String)
+    Dim ub As Long
+    If Not hasItems Then
+        ReDim arr(0 To 0)
+        arr(0) = value
+        hasItems = True
+    Else
+        ub = UBound(arr) + 1
+        ReDim Preserve arr(0 To ub)
+        arr(ub) = value
+    End If
+End Sub
+
+Private Function MemberLookupKey(ByVal dataFileIndex As Long, ByVal reportIndex As Long) As String
+    ' Emission/member-aware key: unique per (df row, report emission) in preserved iteration order.
+    MemberLookupKey = CStr(dataFileIndex) & "|" & CStr(reportIndex)
 End Function
 
-Private Sub ExecuteDataFileSingleMember(ByRef cfg As modTreportConfig.TreportConfig, ByVal dfIdx As Long, ByVal wbSrc As Workbook, ByVal srcPath As String, ByVal fileCtx As String, ByRef outBooks() As Workbook, ByRef outNames() As String, ByRef outPlanMembers() As Variant, ByRef outUsedSheetNames() As Object)
-    ' RC-2 execution pass (single-member groups only): preserve existing Stage 1 semantics/order.
+Private Function FindGroupMemberByEmission(ByVal coll As Object, ByVal emissionOrder As Long) As Object
+    Dim k As Variant
+    Dim mi As Object
+    Set FindGroupMemberByEmission = Nothing
+    If coll Is Nothing Then Exit Function
+    For Each k In coll.Keys
+        Set mi = coll(CStr(k))
+        If CLng(mi("EmissionOrder")) = emissionOrder Then
+            Set FindGroupMemberByEmission = mi
+            Exit Function
+        End If
+    Next k
+End Function
+
+Private Sub EnsureMemberRuntimeFields(ByVal mi As Object, ByVal grp As Object, ByVal outputName As String)
+    ' B3 runtime fields on B2 member dicts (deterministic; first member in ordered group collection is base/final).
+    Dim memberIndexInGroup As Long
+    Dim isBase As Boolean
+    Dim coll As Object
+    Dim j As Long
+    Dim probe As Object
+
+    memberIndexInGroup = 0
+    Set coll = grp("Members")
+    For j = 1 To coll.Count
+        Set probe = coll(CStr(j))
+        If CLng(probe("EmissionOrder")) = CLng(mi("EmissionOrder")) Then
+            memberIndexInGroup = j
+            Exit For
+        End If
+    Next j
+    If memberIndexInGroup <= 0 Then
+        modTreportConfig.Fail 2698, "Create_report/runtime_scaffold[output='" & outputName & "',emission_order=" & CStr(mi("EmissionOrder")) & "]", _
+            "Internal runtime state error: member index in group not found."
+    End If
+
+    isBase = (memberIndexInGroup = 1)
+
+    If Not mi.Exists("MemberIndexInGroup") Then mi.Add "MemberIndexInGroup", memberIndexInGroup Else mi("MemberIndexInGroup") = memberIndexInGroup
+    If Not mi.Exists("IsBase") Then mi.Add "IsBase", isBase Else mi("IsBase") = isBase
+    If Not mi.Exists("IsTemp") Then mi.Add "IsTemp", (Not isBase) Else mi("IsTemp") = (Not isBase)
+    If Not mi.Exists("Sheet") Then mi.Add "Sheet", Nothing
+    If Not mi.Exists("InsertedRange") Then mi.Add "InsertedRange", Nothing
+    If Not mi.Exists("Prepared") Then mi.Add "Prepared", False Else mi("Prepared") = False
+    If Not mi.Exists("CombineStatus") Then mi.Add "CombineStatus", "Pending" Else mi("CombineStatus") = "Pending"
+    If Not mi.Exists("PreparedCtx") Then mi.Add "PreparedCtx", vbNullString Else mi("PreparedCtx") = vbNullString
+    If Not mi.Exists("OutputNameRuntime") Then mi.Add "OutputNameRuntime", outputName Else mi("OutputNameRuntime") = outputName
+
+    If Not grp.Exists("IsCombineGroup") Then grp.Add "IsCombineGroup", (coll.Count > 1) Else grp("IsCombineGroup") = (coll.Count > 1)
+    If Not grp.Exists("CombineStatus") Then grp.Add "CombineStatus", "Pending"
+End Sub
+
+Private Sub ExecuteDataFilePlannedMembers(ByRef cfg As modTreportConfig.TreportConfig, ByVal dfIdx As Long, ByVal wbSrc As Workbook, ByVal srcPath As String, ByVal fileCtx As String, ByRef outBooks() As Workbook, ByRef outNames() As String, ByRef outUsedSheetNames() As Object, ByRef outMemberLookup() As Variant)
+    ' B3 Stage 1: prepare all planned members (single-member and combine groups) in preserved df/report emission order.
     ' Reopen source read-only per df row (caller), obtain pivot, apply df/report filters in same order,
     ' enforce 2410, compute placement, prepare target with B2-assigned planned name, snapshot/format/grouping,
-    ' and register created final sheet in final-produced registry (RC-3). 2612 unreachable for same-base grouping.
+    ' update runtime member refs, and register only base/final sheets in final-produced registry (RC-3/B3).
     Dim ws As Worksheet
     Dim pt As PivotTable
     Dim pf As ParsedFilters
     Dim r As Long
     Dim rc As modTreportFilters.ResolvedContext
     Dim repCtx As String
+    Dim prepCtx As String
     Dim outWs As Worksheet
     Dim pr As Long, pc As Long
     Dim insertedRng As Range
     Dim plannedName As String
-    Dim dfMembers() As modTreportOutput.B2SheetMemberPlan
-    Dim i As Long
+    Dim lookup As Object
+    Dim memberKey As String
+    Dim mi As Object
+    Dim isBase As Boolean
 
-    If IsEmpty(outPlanMembers(dfIdx)) Then Exit Sub
-    dfMembers = outPlanMembers(dfIdx)
+    If IsEmpty(outMemberLookup(LBound(outMemberLookup))) And LBound(outMemberLookup) = UBound(outMemberLookup) Then
+        ' no-op guard not reliable for arrays; continue with normal checks per report
+    End If
 
     Set ws = modTreportPivot.GetDataSheet(wbSrc, cfg.DataFiles(dfIdx).DataSheet, fileCtx & ",path='" & srcPath & "'")
     Set pt = modTreportPivot.GetPrimaryPivot(ws, fileCtx & ",path='" & srcPath & "'")
@@ -386,16 +538,20 @@ Private Sub ExecuteDataFileSingleMember(ByRef cfg As modTreportConfig.TreportCon
             modTreportConfig.Fail 2410, repCtx, "Filter combination yielded no data."
         End If
 
-        plannedName = vbNullString
-        For i = LBound(dfMembers) To UBound(dfMembers)
-            If dfMembers(i).ReportIndex = r Then
-                plannedName = dfMembers(i).PlannedName
-                Exit For
-            End If
-        Next i
+        Set lookup = outMemberLookup(r)
+        memberKey = MemberLookupKey(dfIdx, r)
+        If lookup Is Nothing Or Not lookup.Exists(memberKey) Then
+            modTreportConfig.Fail 2698, repCtx & ",output='" & outNames(r) & "',data_file_index=" & CStr(dfIdx) & ",report_index=" & CStr(r), _
+                "Internal planning/runtime error: missing B3 runtime member for emission."
+        End If
+        Set mi = lookup(memberKey)
+
+        plannedName = CStr(mi("PlannedName"))
         If Len(plannedName) = 0 Then
             modTreportConfig.Fail 2698, repCtx & ",output='" & outNames(r) & "'", "Internal planning error: missing B2 planned sheet name for emission."
         End If
+        isBase = CBool(mi("IsBase"))
+        prepCtx = repCtx & ",output='" & outNames(r) & "',planned_sheet='" & plannedName & "',group_key='" & CStr(mi("GroupKey")) & "',is_base=" & CStr(isBase)
 
         pr = 1: pc = 1
         If isNumeric(cfg.DataFiles(dfIdx).pasteRow) And Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).pasteRow)) > 0 Then pr = CLng(cfg.DataFiles(dfIdx).pasteRow)
@@ -403,21 +559,86 @@ Private Sub ExecuteDataFileSingleMember(ByRef cfg As modTreportConfig.TreportCon
         If pr <= 0 Then pr = 1
         If pc <= 0 Then pc = 1
 
-        Set outWs = modTreportOutput.PrepareTargetSheet(outBooks(r), plannedName, cfg.DataFiles(dfIdx).template, repCtx)
-        Set insertedRng = modTreportExtract.CopyPivotSnapshot(pt, outWs, pr, pc, repCtx, cfg.DataFiles(dfIdx).onlyValues, cfg.DataFiles(dfIdx).insertRows, cfg.DataFiles(dfIdx).skipHeader, (Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).template)) > 0))
-        modTreportExtract.ApplySheetFormatting outWs, cfg.DataFiles(dfIdx).freezeRow, cfg.DataFiles(dfIdx).freezeCol, cfg.DataFiles(dfIdx).Zoom, repCtx, _
+        Set outWs = modTreportOutput.PrepareTargetSheet(outBooks(r), plannedName, cfg.DataFiles(dfIdx).template, prepCtx)
+        Set insertedRng = modTreportExtract.CopyPivotSnapshot(pt, outWs, pr, pc, prepCtx, cfg.DataFiles(dfIdx).onlyValues, cfg.DataFiles(dfIdx).insertRows, cfg.DataFiles(dfIdx).skipHeader, (Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).template)) > 0))
+        modTreportExtract.ApplySheetFormatting outWs, cfg.DataFiles(dfIdx).freezeRow, cfg.DataFiles(dfIdx).freezeCol, cfg.DataFiles(dfIdx).Zoom, prepCtx, _
             (Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).template)) > 0)
-        modTreportExtract.ApplyOutlineGrouping insertedRng, cfg.DataFiles(dfIdx).GroupRows, cfg.General.rowsCollapsed, repCtx & ",output='" & outNames(r) & "',data_sheet='" & plannedName & "'"
+        modTreportExtract.ApplyOutlineGrouping insertedRng, cfg.DataFiles(dfIdx).GroupRows, cfg.General.rowsCollapsed, prepCtx & ",data_sheet='" & plannedName & "'"
 
-        ' RC-3: register created final/base sheet in final-produced registry (case-insensitive) for 2630/cleanup/verify/save.
-        If Not outUsedSheetNames(r).Exists(LCase$(plannedName)) Then
-            outUsedSheetNames(r).Add LCase$(plannedName), True
+        ' Runtime handoff state for B4/B5 hooks.
+        Set mi("Sheet") = outWs
+        Set mi("InsertedRange") = insertedRng
+        mi("Prepared") = True
+        mi("PreparedCtx") = prepCtx
+        mi("CombineStatus") = "Prepared"
+
+        ' B3/RC-3: register only base/final sheets in final-produced registry. Temps remain transient runtime-only.
+        If isBase Then
+            If Not outUsedSheetNames(r).Exists(LCase$(plannedName)) Then
+                outUsedSheetNames(r).Add LCase$(plannedName), True
+            End If
         End If
 
         Set insertedRng = Nothing
         Set outWs = Nothing
+        Set mi = Nothing
+        Set lookup = Nothing
     Next r
 End Sub
+
+Private Sub ExecuteOutputStage2Hooks(ByVal reportIdx As Long, ByVal outBook As Workbook, ByVal outputName As String, ByVal groupsByKey As Object, ByRef outGroupOrder As Variant, ByVal finalProducedNames As Object, ByVal reportRowsLimitGeneral As Long)
+    ' B3 Stage 2 orchestration: deterministic group order; B4 combine for IsCombineGroup, B5 finalize only after B4 success.
+    ' Unimplemented hooks must fail-fast explicitly before cleanup/verify/save; EH closes outputs without save.
+    Dim i As Long
+    Dim gk As String
+    Dim grp As Object
+    Dim ctx As String
+
+    If IsEmpty(outGroupOrder) Then Exit Sub
+    If groupsByKey Is Nothing Then Exit Sub
+
+    For i = LBound(outGroupOrder) To UBound(outGroupOrder)
+        gk = CStr(outGroupOrder(i))
+        If Not groupsByKey.Exists(gk) Then
+            modTreportConfig.Fail 2698, "Create_report/stage2[output='" & outputName & "',report_index=" & CStr(reportIdx) & ",group_key='" & gk & "']", _
+                "Internal runtime state error: group missing during Stage 2 orchestration."
+        End If
+        Set grp = groupsByKey(gk)
+        ctx = "Create_report/stage2[output='" & outputName & "',report_index=" & CStr(reportIdx) & ",group_key='" & gk & "',effective_base='" & CStr(grp("BaseName")) & "']"
+
+        If Not IsCombineGroup(grp) Then
+            grp("CombineStatus") = "SingleMember"
+            GoTo ContinueGroup
+        End If
+
+        ' B4 must complete combine/validations/transfer for group before B5. Stub fails fast before save.
+        modTreportExtract.CombinePreparedGroup outBook, grp, outputName, reportRowsLimitGeneral, ctx & "/combine"
+        grp("CombineStatus") = "Combined"
+
+        ' B5 must delete temps only after successful transfer and reconcile final/base state. Stub fails fast before save.
+        modTreportOutput.FinalizeCombinedGroupTemps outBook, grp, finalProducedNames, ctx & "/finalize"
+        grp("CombineStatus") = "Finalized"
+
+ContinueGroup:
+        Set grp = Nothing
+    Next i
+End Sub
+
+Private Function IsCombineGroup(ByVal grp As Object) As Boolean
+    If grp Is Nothing Then
+        IsCombineGroup = False
+        Exit Function
+    End If
+    If grp.Exists("IsCombineGroup") Then
+        IsCombineGroup = CBool(grp("IsCombineGroup"))
+        Exit Function
+    End If
+    If grp.Exists("Members") Then
+        IsCombineGroup = (grp("Members").Count > 1)
+    Else
+        IsCombineGroup = False
+    End If
+End Function
 
 Private Function ResolveReportSheetPlaceholderMaxValues(ByVal pt As PivotTable, ByVal reportSheetTemplate As String, ByVal ctx As String) As Object
     ' Computes row-scoped <max_<field>> / <max-N_<field>> values for a data_files row template.

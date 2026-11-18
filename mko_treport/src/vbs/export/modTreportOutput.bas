@@ -817,3 +817,20 @@ End Function
 
 
 
+
+Public Sub FinalizeCombinedGroupTemps(ByVal outBook As Workbook, ByVal groupRecord As Object, ByVal finalProducedNames As Object, ByVal ctx As String)
+    ' B3 hook contract (B5 not implemented): fail-fast before cleanup/verify/save; no side effects implying success.
+    ' Must run only after successful B4 combine; temps must not be deleted here in B3 stub.
+    Dim baseName As String
+    Dim memberCount As Long
+    baseName = vbNullString
+    memberCount = 0
+    If Not groupRecord Is Nothing Then
+        On Error Resume Next
+        baseName = CStr(groupRecord("BaseName"))
+        If groupRecord.Exists("Members") Then memberCount = groupRecord("Members").Count
+        On Error GoTo 0
+    End If
+    modTreportConfig.Fail 2696, ctx & ",effective_base='" & baseName & "',member_count=" & CStr(memberCount), _
+        "B5 finalization hook is not implemented. Combine may have completed but temp deletion/final registry reconciliation cannot proceed; aborting before save with no output workbook saved."
+End Sub

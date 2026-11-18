@@ -517,3 +517,19 @@ End Sub
 
 
 
+
+Public Sub CombinePreparedGroup(ByVal outBook As Workbook, ByVal groupRecord As Object, ByVal outputName As String, ByVal reportRowsLimitGeneral As Long, ByVal ctx As String)
+    ' B3 hook contract (B4 not implemented): fail-fast before cleanup/verify/save; no side effects implying success.
+    Dim baseName As String
+    Dim memberCount As Long
+    baseName = vbNullString
+    memberCount = 0
+    If Not groupRecord Is Nothing Then
+        On Error Resume Next
+        baseName = CStr(groupRecord("BaseName"))
+        If groupRecord.Exists("Members") Then memberCount = groupRecord("Members").Count
+        On Error GoTo 0
+    End If
+    modTreportConfig.Fail 2697, ctx & ",output='" & outputName & "',effective_base='" & baseName & "',member_count=" & CStr(memberCount) & ",report_rows_limit_general=" & CStr(reportRowsLimitGeneral), _
+        "B4 combine hook is not implemented. Stage 1 preparation completed for all members, but combine/transfer/validation/finalization cannot proceed; aborting before save with no output workbook saved."
+End Sub
