@@ -489,47 +489,432 @@ GroupingComFail:
 End Sub
 
 
+' =========================
+' B4 (P01): Stage 2 combine — validation, append geometry, transfer fidelity, limits (CR-10..CR-17v, D-02, D-05)
+' Hook contract (B3): called for combine groups after Stage 1 all-members preparation, before B5 and before save.
+' No temp deletion, no final-registry mutation, no side effects implying success on failure.
+' =========================
 
+Private Function B4DictHas(ByVal d As Object, ByVal key As String) As Boolean
+    On Error Resume Next
+    If d Is Nothing Then
+        B4DictHas = False
+    Else
+        B4DictHas = d.Exists(key)
+    End If
+    On Error GoTo 0
+End Function
 
+Private Function B4DictStr(ByVal d As Object, ByVal key As String, ByVal defaultValue As String) As String
+    On Error Resume Next
+    If B4DictHas(d, key) Then
+        B4DictStr = CStr(d(key))
+    Else
+        B4DictStr = defaultValue
+    End If
+    If Err.Number <> 0 Then B4DictStr = defaultValue
+    On Error GoTo 0
+End Function
 
+Private Function B4DictLong(ByVal d As Object, ByVal key As String, ByVal defaultValue As Long) As Long
+    On Error Resume Next
+    If B4DictHas(d, key) Then
+        B4DictLong = CLng(d(key))
+    Else
+        B4DictLong = defaultValue
+    End If
+    If Err.Number <> 0 Then B4DictLong = defaultValue
+    On Error GoTo 0
+End Function
 
+Private Function B4DictBool(ByVal d As Object, ByVal key As String, ByVal defaultValue As Boolean) As Boolean
+    On Error Resume Next
+    If B4DictHas(d, key) Then
+        B4DictBool = CBool(d(key))
+    Else
+        B4DictBool = defaultValue
+    End If
+    If Err.Number <> 0 Then B4DictBool = defaultValue
+    On Error GoTo 0
+End Function
 
+Private Function B4SafeRangeAddress(ByVal rg As Range) As String
+    On Error Resume Next
+    If rg Is Nothing Then
+        B4SafeRangeAddress = "<Nothing>"
+    Else
+        B4SafeRangeAddress = rg.Worksheet.Name & "!" & rg.Address(False, False)
+    End If
+    If Err.Number <> 0 Then B4SafeRangeAddress = "<unavailable>"
+    On Error GoTo 0
+End Function
 
+Private Function B4MemberCommonContext(ByVal mi As Object, ByVal grp As Object, ByVal outputName As String, ByVal memberIndex As Long) As String
+    Dim s As String
+    Dim plannedName As String
+    Dim baseName As String
+    Dim isBase As Boolean
+    Dim insertedRg As Range
 
+    plannedName = B4DictStr(mi, "PlannedName", vbNullString)
+    baseName = B4DictStr(grp, "BaseName", vbNullString)
+    isBase = B4DictBool(mi, "IsBase", (memberIndex = 1))
+    s = ",output='" & outputName & "'" & _
+        ",final_report_sheet='" & baseName & "'" & _
+        ",group_key='" & B4DictStr(grp, "GroupKey", vbNullString) & "'" & _
+        ",member_index=" & CStr(memberIndex) & _
+        ",is_base=" & CStr(isBase) & _
+        ",planned_sheet='" & plannedName & "'" & _
+        ",worksheet_name='" & plannedName & "'" & _
+        ",associated_report_sheet='" & baseName & "'" & _
+        ",report_name='" & B4DictStr(mi, "ReportName", vbNullString) & "'" & _
+        ",report_index=" & CStr(B4DictLong(mi, "ReportIndex", 0)) & _
+        ",data_file_index=" & CStr(B4DictLong(mi, "DataFileIndex", 0)) & _
+        ",data_file_row=" & CStr(B4DictLong(mi, "DataFileRowIndex", 0)) & _
+        ",emission_order=" & CStr(B4DictLong(mi, "EmissionOrder", 0)) & _
+        ",file_ctx='" & B4DictStr(mi, "FileCtx", vbNullString) & "'" & _
+        ",rep_ctx='" & B4DictStr(mi, "RepCtx", vbNullString) & "'" & _
+        ",prepared_ctx='" & B4DictStr(mi, "PreparedCtx", vbNullString) & "'"
+    On Error Resume Next
+    Set insertedRg = Nothing
+    If B4DictHas(mi, "InsertedRange") Then Set insertedRg = mi("InsertedRange")
+    If Not insertedRg Is Nothing Then s = s & ",inserted_range='" & B4SafeRangeAddress(insertedRg) & "'"
+    On Error GoTo 0
+    B4MemberCommonContext = s
+End Function
 
+Private Function B4GetGroupMember(ByVal grp As Object, ByVal oneBasedIndex As Long, ByVal ctx As String) As Object
+    Dim coll As Object
+    Dim key As String
+    If grp Is Nothing Then
+        modTreportConfig.Fail 2698, ctx, "Internal B4 state error: group record is Nothing."
+    End If
+    If Not B4DictHas(grp, "Members") Then
+        modTreportConfig.Fail 2698, ctx, "Internal B4 state error: group record has no Members collection."
+    End If
+    On Error Resume Next
+    Set coll = grp("Members")
+    On Error GoTo 0
+    If coll Is Nothing Then
+        modTreportConfig.Fail 2698, ctx, "Internal B4 state error: group Members collection is Nothing."
+    End If
+    key = CStr(oneBasedIndex)
+    If Not coll.Exists(key) Then
+        modTreportConfig.Fail 2698, ctx & ",member_index=" & CStr(oneBasedIndex), "Internal B4 state error: missing member at deterministic index."
+    End If
+    Set B4GetGroupMember = coll(key)
+End Function
 
+Private Sub B4ValidatePreconditions(ByVal outBook As Workbook, ByVal grp As Object, ByVal outputName As String, ByVal reportRowsLimitGeneral As Long, ByVal ctx As String, ByRef memberCount As Long)
+    Dim j As Long
+    Dim mi As Object
+    Dim ws As Worksheet
+    Dim plannedName As String
 
+    If outBook Is Nothing Then
+        modTreportConfig.Fail 2698, ctx & ",output='" & outputName & "'", "Internal B4 state error: output workbook is Nothing."
+    End If
+    If grp Is Nothing Then
+        modTreportConfig.Fail 2698, ctx & ",output='" & outputName & "'", "Internal B4 state error: group record is Nothing."
+    End If
+    If Not B4DictHas(grp, "Members") Then
+        modTreportConfig.Fail 2698, ctx & ",output='" & outputName & "',group_key='" & B4DictStr(grp, "GroupKey", vbNullString) & "'", "Internal B4 state error: group Members collection missing."
+    End If
+    On Error Resume Next
+    memberCount = grp("Members").Count
+    If Err.Number <> 0 Then memberCount = 0
+    On Error GoTo 0
+    If memberCount < 2 Then
+        modTreportConfig.Fail 2698, ctx & ",output='" & outputName & "',effective_base='" & B4DictStr(grp, "BaseName", vbNullString) & "',member_count=" & CStr(memberCount), _
+            "Internal B4 state error: combine group requires at least 2 prepared members."
+    End If
+    If reportRowsLimitGeneral <= 0 Then
+        modTreportConfig.Fail 2698, ctx & ",output='" & outputName & "',report_rows_limit_general=" & CStr(reportRowsLimitGeneral), _
+            "Internal B4 state error: report_rows_limit_general must be > 0."
+    End If
 
+    For j = 1 To memberCount
+        Set mi = B4GetGroupMember(grp, j, ctx & ",output='" & outputName & "'")
+        If mi Is Nothing Then
+            modTreportConfig.Fail 2698, ctx & ",output='" & outputName & "',member_index=" & CStr(j), "Internal B4 state error: member record is Nothing."
+        End If
+        If Not B4DictBool(mi, "Prepared", False) Then
+            modTreportConfig.Fail 2698, ctx & B4MemberCommonContext(mi, grp, outputName, j), "Internal B4 state error: member is not marked Prepared."
+        End If
+        Set ws = Nothing
+        On Error Resume Next
+        If B4DictHas(mi, "Sheet") Then Set ws = mi("Sheet")
+        On Error GoTo 0
+        If ws Is Nothing Then
+            modTreportConfig.Fail 2698, ctx & B4MemberCommonContext(mi, grp, outputName, j), "Internal B4 state error: prepared member worksheet is Nothing."
+        End If
+        plannedName = B4DictStr(mi, "PlannedName", vbNullString)
+        If Len(plannedName) = 0 Then
+            modTreportConfig.Fail 2698, ctx & B4MemberCommonContext(mi, grp, outputName, j), "Internal B4 state error: member PlannedName is empty."
+        End If
+        If j = 1 Then
+            If Not B4DictBool(mi, "IsBase", False) Then
+                modTreportConfig.Fail 2698, ctx & B4MemberCommonContext(mi, grp, outputName, j), "Internal B4 state error: first group member must be base."
+            End If
+        Else
+            If Not B4DictBool(mi, "IsTemp", False) Then
+                modTreportConfig.Fail 2698, ctx & B4MemberCommonContext(mi, grp, outputName, j), "Internal B4 state error: non-first group member must be temp."
+            End If
+        End If
+        Set ws = Nothing
+        Set mi = Nothing
+    Next j
+End Sub
 
+Private Function B4RangeHasDataOrFormula(ByVal rg As Range) As Boolean
+    ' D-05/CR-17v presence gate: valid content exists if any constant or formula is present in the range.
+    ' Accepts valid one-row reports with data/formula; rejects formatting-only/no-content ranges.
+    Dim found As Range
 
+    B4RangeHasDataOrFormula = False
+    If rg Is Nothing Then Exit Function
 
+    Set found = Nothing
+    On Error Resume Next
+    Err.Clear
+    Set found = rg.SpecialCells(xlCellTypeConstants)
+    On Error GoTo 0
+    If Not found Is Nothing Then
+        B4RangeHasDataOrFormula = True
+        Exit Function
+    End If
 
+    Set found = Nothing
+    On Error Resume Next
+    Err.Clear
+    Set found = rg.SpecialCells(xlCellTypeFormulas)
+    On Error GoTo 0
+    If Not found Is Nothing Then
+        B4RangeHasDataOrFormula = True
+    End If
+End Function
 
+Private Sub B4ValidateMemberContentAndLimit(ByVal mi As Object, ByVal grp As Object, ByVal outputName As String, ByVal memberIndex As Long, ByVal reportRowsLimitGeneral As Long, ByVal ctx As String, ByRef sourceBlock As Range)
+    Dim ws As Worksheet
+    Dim common As String
+    Dim actualRows As Long
 
+    Set ws = mi("Sheet")
+    Set sourceBlock = ws.UsedRange
+    common = ctx & B4MemberCommonContext(mi, grp, outputName, memberIndex) & _
+        ",used_range='" & B4SafeRangeAddress(sourceBlock) & "'" & _
+        ",used_range_row=" & CStr(sourceBlock.Row) & _
+        ",used_range_col=" & CStr(sourceBlock.Column) & _
+        ",used_range_rows=" & CStr(sourceBlock.Rows.Count) & _
+        ",used_range_cols=" & CStr(sourceBlock.Columns.Count)
 
+    ' D-05 (CR-17v): expected subreport must have valid content range (data or formula). Valid one-row not rejected by row count alone.
+    If Not B4RangeHasDataOrFormula(sourceBlock) Then
+        modTreportConfig.Fail 2691, common, _
+            "Expected subreport has no valid content range (D-05/CR-17v): no data or formulas found in prepared worksheet UsedRange. " & _
+            "Empty subreports must not be silently skipped; a valid one-row report is not rejected solely because UsedRange.Rows.Count = 1."
+    End If
 
+    ' CR-15/D-02: per-subreport row limit applies to every prepared subreport (base and temps), based on worksheet UsedRange.Rows.Count.
+    actualRows = sourceBlock.Rows.Count
+    If actualRows > reportRowsLimitGeneral Then
+        modTreportConfig.Fail 2692, common & _
+            ",actual_row_count=" & CStr(actualRows) & _
+            ",configured_report_rows_limit_general=" & CStr(reportRowsLimitGeneral), _
+            "Prepared subreport exceeds report_rows_limit_general (CR-15/D-02): worksheet '" & B4DictStr(mi, "PlannedName", vbNullString) & _
+            "', associated report_sheet '" & B4DictStr(grp, "BaseName", vbNullString) & _
+            "', actual_row_count=" & CStr(actualRows) & _
+            ", configured_report_rows_limit_general=" & CStr(reportRowsLimitGeneral) & "."
+    End If
+End Sub
 
+Private Sub B4ValidateProjectedAppendBounds(ByVal baseWs As Worksheet, ByVal srcBlock As Range, ByVal destinationRow As Long, ByVal gapRows As Long, ByVal baseUsedNow As Range, ByVal mi As Object, ByVal grp As Object, ByVal outputName As String, ByVal memberIndex As Long, ByVal ctx As String)
+    Dim projLastRow As Long
+    Dim projLastCol As Long
+    Dim baseLastRow As Long
+    Dim nextRow As Long
+    Dim common As String
+    Const EXCEL_MAX_ROWS As Long = 1048576
+    Const EXCEL_MAX_COLS As Long = 16384
 
+    baseLastRow = baseUsedNow.Row + baseUsedNow.Rows.Count - 1
+    nextRow = baseLastRow + 1
+    projLastRow = destinationRow + srcBlock.Rows.Count - 1
+    projLastCol = srcBlock.Column + srcBlock.Columns.Count - 1
 
+    common = ctx & B4MemberCommonContext(mi, grp, outputName, memberIndex) & _
+        ",destination_row=" & CStr(destinationRow) & _
+        ",gap_rows=" & CStr(gapRows) & _
+        ",base_last_row=" & CStr(baseLastRow) & _
+        ",base_next_row=" & CStr(nextRow) & _
+        ",base_used_range='" & B4SafeRangeAddress(baseUsedNow) & "'" & _
+        ",source_used_range='" & B4SafeRangeAddress(srcBlock) & "'" & _
+        ",source_row=" & CStr(srcBlock.Row) & _
+        ",source_col=" & CStr(srcBlock.Column) & _
+        ",source_rows=" & CStr(srcBlock.Rows.Count) & _
+        ",source_cols=" & CStr(srcBlock.Columns.Count)
 
+    ' CR-16: validate projected final combined dimensions before each paste; do not paste if exceeded.
+    If destinationRow < 1 Or projLastRow > EXCEL_MAX_ROWS Then
+        modTreportConfig.Fail 2693, common & _
+            ",projected_row_boundary=" & CStr(projLastRow) & _
+            ",applicable_excel_limit=" & CStr(EXCEL_MAX_ROWS), _
+            "Projected combined worksheet exceeds Excel row limit before paste (CR-16). " & _
+            "final_report_sheet='" & B4DictStr(grp, "BaseName", vbNullString) & _
+            "', projected_row_boundary=" & CStr(projLastRow) & _
+            ", applicable_excel_limit=" & CStr(EXCEL_MAX_ROWS) & ". Paste was not attempted."
+    End If
+    If projLastCol > EXCEL_MAX_COLS Then
+        modTreportConfig.Fail 2693, common & _
+            ",projected_column_boundary=" & CStr(projLastCol) & _
+            ",applicable_excel_limit=" & CStr(EXCEL_MAX_COLS), _
+            "Projected combined worksheet exceeds Excel column limit before paste (CR-16). " & _
+            "final_report_sheet='" & B4DictStr(grp, "BaseName", vbNullString) & _
+            "', projected_column_boundary=" & CStr(projLastCol) & _
+            ", applicable_excel_limit=" & CStr(EXCEL_MAX_COLS) & ". Paste was not attempted."
+    End If
+End Sub
 
+Private Sub B4AppendSourceBlock(ByVal srcBlock As Range, ByVal baseWs As Worksheet, ByVal destinationRow As Long, ByVal ctx As String)
+    ' CR-12..CR-14: values not formulas; formats incl. number formats; row heights; hidden row states; outline levels at new positions.
+    ' CR-13: no column widths, no hidden column states, no zoom/freeze/split/view changes, no base layout/display transfer.
+    ' Deterministic object-based operations, no Select/Activate. CutCopyMode cleared (safe-state only) on success/failure.
+    Dim srcWs As Worksheet
+    Dim dstRg As Range
+    Dim dstCell As Range
+    Dim rowCount As Long
+    Dim colCount As Long
+    Dim i As Long
+    Dim srcRow As Long
+    Dim dstRow As Long
 
+    On Error GoTo EH
+    If srcBlock Is Nothing Then
+        modTreportConfig.Fail 2694, ctx & ",operation='append_source_block'", "Internal B4 transfer error: source block is Nothing."
+    End If
+    If baseWs Is Nothing Then
+        modTreportConfig.Fail 2694, ctx & ",operation='append_source_block'", "Internal B4 transfer error: base worksheet is Nothing."
+    End If
 
+    Set srcWs = srcBlock.Worksheet
+    rowCount = srcBlock.Rows.Count
+    colCount = srcBlock.Columns.Count
+    Set dstCell = baseWs.Cells(destinationRow, srcBlock.Column)
+    Set dstRg = baseWs.Range(baseWs.Cells(destinationRow, srcBlock.Column), _
+                             baseWs.Cells(destinationRow + rowCount - 1, srcBlock.Column + colCount - 1))
 
+    ' Values only (no formulas). Clipboard-free bulk assignment.
+    dstRg.Value = srcBlock.Value
 
+    ' Formats including number formats (not column widths). PasteSpecial xlPasteFormats only.
+    srcBlock.Copy
+    dstCell.PasteSpecial Paste:=xlPasteFormats
+    Application.CutCopyMode = False
+
+    ' Row heights, hidden row states, and outline/grouping levels restored at destination row positions.
+    For i = 1 To rowCount
+        srcRow = srcBlock.Row + i - 1
+        dstRow = destinationRow + i - 1
+        baseWs.Rows(dstRow).RowHeight = srcWs.Rows(srcRow).RowHeight
+        baseWs.Rows(dstRow).Hidden = srcWs.Rows(srcRow).Hidden
+        baseWs.Rows(dstRow).OutlineLevel = srcWs.Rows(srcRow).OutlineLevel
+    Next i
+
+    Application.CutCopyMode = False
+    Exit Sub
+
+EH:
+    On Error Resume Next
+    Application.CutCopyMode = False
+    On Error GoTo 0
+    modTreportConfig.Fail 2694, ctx & _
+        ",operation='append_source_block'" & _
+        ",destination_row=" & CStr(destinationRow) & _
+        ",source_range='" & B4SafeRangeAddress(srcBlock) & "'" & _
+        ",row_count=" & CStr(rowCount) & _
+        ",col_count=" & CStr(colCount) & _
+        ",err_number=" & CStr(Err.Number), _
+        "Stage 2 combine transfer failed (CR-12..CR-14): " & Err.Description & _
+        ". Clipboard/state cleanup attempted (CutCopyMode cleared); no temp deletion or final-registry changes performed by B4."
+End Sub
 
 Public Sub CombinePreparedGroup(ByVal outBook As Workbook, ByVal groupRecord As Object, ByVal outputName As String, ByVal reportRowsLimitGeneral As Long, ByVal ctx As String)
-    ' B3 hook contract (B4 not implemented): fail-fast before cleanup/verify/save; no side effects implying success.
-    Dim baseName As String
+    ' B4 implementation: Stage 2 combine for a prepared combine group (B3 orchestration contract).
+    ' - Phase 1: validate/capture UsedRange and enforce D-05/CR-15 for all members (base + temps) before any append.
+    ' - Phase 2: append temp members 2..N in deterministic order with CR-10/CR-11 geometry, CR-16 pre-paste bounds,
+    '   and CR-12..CR-14 transfer profile (values not formulas, formats incl. number formats, row heights,
+    '   hidden row states, outline levels at new positions). CR-13 exclusions preserved. No temp deletion (B5).
     Dim memberCount As Long
-    baseName = vbNullString
-    memberCount = 0
-    If Not groupRecord Is Nothing Then
-        On Error Resume Next
-        baseName = CStr(groupRecord("BaseName"))
-        If groupRecord.Exists("Members") Then memberCount = groupRecord("Members").Count
-        On Error GoTo 0
+    Dim j As Long
+    Dim mi As Object
+    Dim baseMi As Object
+    Dim baseWs As Worksheet
+    Dim srcWs As Worksheet
+    Dim srcBlock As Range
+    Dim baseUsedNow As Range
+    Dim sourceBlocks() As Range
+    Dim gapRows As Long
+    Dim lastRow As Long
+    Dim nextRow As Long
+    Dim destinationRow As Long
+    Dim memberCtx As String
+
+    B4ValidatePreconditions outBook, groupRecord, outputName, reportRowsLimitGeneral, ctx, memberCount
+
+    ReDim sourceBlocks(1 To memberCount)
+
+    ' Phase 1: capture source blocks and validate D-05/CR-15 for all members, including base, before any append/mutation.
+    For j = 1 To memberCount
+        Set mi = B4GetGroupMember(groupRecord, j, ctx)
+        memberCtx = ctx & "/precheck"
+        B4ValidateMemberContentAndLimit mi, groupRecord, outputName, j, reportRowsLimitGeneral, memberCtx, srcBlock
+        Set sourceBlocks(j) = srcBlock
+        Set srcBlock = Nothing
+        Set mi = Nothing
+    Next j
+
+    Set baseMi = B4GetGroupMember(groupRecord, 1, ctx)
+    On Error Resume Next
+    Set baseWs = baseMi("Sheet")
+    On Error GoTo 0
+    If baseWs Is Nothing Then
+        modTreportConfig.Fail 2698, ctx & B4MemberCommonContext(baseMi, groupRecord, outputName, 1), _
+            "Internal B4 state error: base member worksheet is Nothing during combine."
     End If
-    modTreportConfig.Fail 2697, ctx & ",output='" & outputName & "',effective_base='" & baseName & "',member_count=" & CStr(memberCount) & ",report_rows_limit_general=" & CStr(reportRowsLimitGeneral), _
-        "B4 combine hook is not implemented. Stage 1 preparation completed for all members, but combine/transfer/validation/finalization cannot proceed; aborting before save with no output workbook saved."
+
+    ' Phase 2: append temp members 2..N sequentially in original order; first subreport (base) gap ignored.
+    For j = 2 To memberCount
+        Set mi = B4GetGroupMember(groupRecord, j, ctx)
+        Set srcBlock = sourceBlocks(j)
+        If srcBlock Is Nothing Then
+            modTreportConfig.Fail 2698, ctx & B4MemberCommonContext(mi, groupRecord, outputName, j), _
+                "Internal B4 state error: captured source block is Nothing for append."
+        End If
+        Set srcWs = srcBlock.Worksheet
+
+        gapRows = B4DictLong(mi, "GapRows", 0)
+        If gapRows < 0 Then gapRows = 0
+
+        ' CR-10/CR-11: recompute base geometry from current UsedRange before each append.
+        Set baseUsedNow = baseWs.UsedRange
+        lastRow = baseUsedNow.Row + baseUsedNow.Rows.Count - 1
+        nextRow = lastRow + 1
+        destinationRow = nextRow + gapRows
+
+        ' CR-16: projected bounds validated before paste; fail-fast without paste attempt on exceed.
+        B4ValidateProjectedAppendBounds baseWs, srcBlock, destinationRow, gapRows, baseUsedNow, mi, groupRecord, outputName, j, ctx & "/bounds"
+
+        ' CR-11/CR-12..CR-14: append preserving source starting column; no paste_row/paste_col reapply.
+        B4AppendSourceBlock srcBlock, baseWs, destinationRow, ctx & "/append" & B4MemberCommonContext(mi, groupRecord, outputName, j)
+
+        Set baseUsedNow = Nothing
+        Set srcBlock = Nothing
+        Set srcWs = Nothing
+        Set mi = Nothing
+    Next j
+
+    ' Success: no temp deletion/final-registry reconciliation in B4 (B5 responsibility after successful transfer).
+    Set baseWs = Nothing
+    Set baseMi = Nothing
 End Sub
+
