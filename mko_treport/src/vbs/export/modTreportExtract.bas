@@ -629,8 +629,8 @@ Private Sub B4ValidatePreconditions(ByVal outBook As Workbook, ByVal grp As Obje
             "Internal B4 state error: combine group requires at least 2 prepared members."
     End If
     If reportRowsLimitGeneral <= 0 Then
-        modTreportConfig.Fail 2698, ctx & ",output='" & outputName & "',report_rows_limit_general=" & CStr(reportRowsLimitGeneral), _
-            "Internal B4 state error: report_rows_limit_general must be > 0."
+        modTreportConfig.Fail 2698, ctx & ",output='" & outputName & "',report_rows_limit=" & CStr(reportRowsLimitGeneral), _
+            "Internal B4 state error: report_rows_limit must be > 0."
     End If
 
     For j = 1 To memberCount
@@ -720,11 +720,11 @@ Private Sub B4ValidateMemberContentAndLimit(ByVal mi As Object, ByVal grp As Obj
     If actualRows > reportRowsLimitGeneral Then
         modTreportConfig.Fail 2692, common & _
             ",actual_row_count=" & CStr(actualRows) & _
-            ",configured_report_rows_limit_general=" & CStr(reportRowsLimitGeneral), _
-            "Prepared subreport exceeds report_rows_limit_general (CR-15/D-02): worksheet '" & B4DictStr(mi, "PlannedName", vbNullString) & _
+            ",configured_report_rows_limit=" & CStr(reportRowsLimitGeneral), _
+            "Prepared subreport exceeds report_rows_limit (CR-15/D-02): worksheet '" & B4DictStr(mi, "PlannedName", vbNullString) & _
             "', associated report_sheet '" & B4DictStr(grp, "BaseName", vbNullString) & _
             "', actual_row_count=" & CStr(actualRows) & _
-            ", configured_report_rows_limit_general=" & CStr(reportRowsLimitGeneral) & "."
+            ", configured_report_rows_limit=" & CStr(reportRowsLimitGeneral) & "."
     End If
 End Sub
 

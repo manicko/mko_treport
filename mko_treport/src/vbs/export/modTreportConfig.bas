@@ -171,15 +171,15 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
                             Fail 2107, "config/general", "parameter 'rows_collapsed' has invalid value '" & CStr(pValRaw) & "' (row=" & i & ", section='general'); expected blank, False/0/No, or True/1/Yes."
                     End Select
                 End If
-            Case "report_rows_limit_general"
+            Case "report_rows_limit", "report_rows_limit_general"
                 If rrLimitFound Then
-                    Fail 2108, "config/general", "parameter 'report_rows_limit_general' is duplicated (row=" & i & ", section='general'); expected a single explicit positive integer value."
+                    Fail 2108, "config/general", "parameter 'report_rows_limit' is duplicated (row=" & i & ", section='general'); expected a single explicit positive integer value."
                 End If
                 cfg.General.reportRowsLimitGeneral = ReadGeneralReportRowsLimitValue(pValRaw, i)
                 rrLimitFound = True
         End Select
     Next i
-    If Not rrLimitFound Then Fail 2108, "config/general", "parameter 'report_rows_limit_general' is required and was not found."
+    If Not rrLimitFound Then Fail 2108, "config/general", "parameter 'report_rows_limit' is required and was not found in 'general' table."
     If Len(cfg.General.inputPath) = 0 Then Fail 2104, "config/general", "parameter 'input_path' is required and must be non-empty."
     If Len(cfg.General.outputPath) = 0 Then Fail 2105, "config/general", "parameter 'output_path' is required and must be non-empty."
     If Len(cfg.General.Delimeter) = 0 Then Fail 2106, "config/general", "parameter 'delimeter' is required and must be non-empty."
@@ -378,19 +378,19 @@ Private Function ReadGeneralReportRowsLimitValue(ByVal raw As Variant, ByVal row
     Dim d As Double
 
     If IsError(raw) Then
-        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid error value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+        Fail 2108, "config/general", "parameter 'report_rows_limit' has invalid error value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
     End If
     If IsEmpty(raw) Or IsNull(raw) Then
-        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+        Fail 2108, "config/general", "parameter 'report_rows_limit' has invalid value '' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
     End If
     If VarType(raw) = vbBoolean Then
-        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+        Fail 2108, "config/general", "parameter 'report_rows_limit' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
     End If
     If Len(Norm(raw)) = 0 Then
-        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+        Fail 2108, "config/general", "parameter 'report_rows_limit' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
     End If
     If Not IsNumeric(raw) Then
-        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+        Fail 2108, "config/general", "parameter 'report_rows_limit' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
     End If
 
     On Error GoTo EHOverflow
@@ -398,10 +398,10 @@ Private Function ReadGeneralReportRowsLimitValue(ByVal raw As Variant, ByVal row
     On Error GoTo 0
 
     If d <> Fix(d) Then
-        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+        Fail 2108, "config/general", "parameter 'report_rows_limit' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
     End If
     If d <= 0# Or d > 2147483647# Then
-        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+        Fail 2108, "config/general", "parameter 'report_rows_limit' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
     End If
 
     ReadGeneralReportRowsLimitValue = CLng(d)
@@ -409,7 +409,7 @@ Private Function ReadGeneralReportRowsLimitValue(ByVal raw As Variant, ByVal row
 
 EHOverflow:
     On Error GoTo 0
-    Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+    Fail 2108, "config/general", "parameter 'report_rows_limit' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
 End Function
 
 Private Function ReadDataFilesGapRowsValue(ByVal raw As Variant, ByVal rowIdx As Long, ByVal dataFileName As String, ByVal dataSheetName As String) As Long
