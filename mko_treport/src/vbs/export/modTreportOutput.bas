@@ -503,6 +503,301 @@ Public Sub EnsureProducedSheetsPresent(ByVal outWb As Workbook, ByVal producedSh
     Next k
 End Sub
 
+' =========================
+' B2 (P01): naming/group planning and collision preflight
+' RC-1..RC-5, D-03/D-04/D-06/OQ-7, CR-01..CR-03/CR-05/CR-06/CR-07/CR-19n..CR-21n/CR-22g/CR-23g
+' =========================
+
+Public Type B2SheetMemberPlan
+    ReportIndex As Long
+    DataFileIndex As Long
+    DataFileRowIndex As Long
+    EmissionOrder As Long
+    GapRows As Long
+    EffectiveBaseName As String
+    GroupKey As String
+    PlannedName As String
+    SuffixText As String
+    SuffixLength As Long
+    OutputName As String
+    ReportName As String
+    FileCtx As String
+    RepCtx As String
+    RawReportSheetTemplate As String
+End Type
+
+Public Type B2SheetGroupPlan
+    GroupKey As String
+    EffectiveBaseName As String
+    MemberCount As Long
+    Members() As B2SheetMemberPlan
+End Type
+
+Public Function NormalizeSheetNameChars(ByVal nameIn As String) As String
+    ' D-03/CR-01: apply existing sanitization character rules without length validation.
+    Dim s As String, i As Long, ch As String, bad As String
+    s = modTreportConfig.Norm(nameIn)
+    bad = ":\/?*[]"
+    For i = 1 To Len(bad)
+        ch = Mid$(bad, i, 1)
+        s = Replace$(s, ch, "_")
+    Next i
+    s = Replace$(s, "'", "_")
+    NormalizeSheetNameChars = s
+End Function
+
+Public Function ResolveEffectiveBaseSheetName(ByVal substitutedName As String, ByVal ctx As String, ByVal rawTemplateOptional As String) As String
+    ' Resolve placeholders/substitutions upstream, then normalize/sanitize to effective base name (no numeric suffix).
+    ' 2601 preserved for empty; legacy 2602 is not used for planning-validated D-04 cases.
+    Dim baseName As String
+    baseName = NormalizeSheetNameChars(substitutedName)
+    If Len(baseName) = 0 Then
+        modTreportConfig.Fail 2601, ctx & B2RawTemplateContext(rawTemplateOptional), "Resulting sheet name is empty after normalization."
+    End If
+    ResolveEffectiveBaseSheetName = baseName
+End Function
+
+Private Function B2RawTemplateContext(ByVal rawTemplateOptional As String) As String
+    If Len(rawTemplateOptional) > 0 Then
+        B2RawTemplateContext = ",raw_report_sheet_template='" & rawTemplateOptional & "'"
+    Else
+        B2RawTemplateContext = vbNullString
+    End If
+End Function
+
+Public Function MakeSheetGroupKey(ByVal effectiveBaseName As String) As String
+    ' D-03/CR-01: case-insensitive grouping key within the same output workbook.
+    MakeSheetGroupKey = LCase$(effectiveBaseName)
+End Function
+
+Private Function B2PlanningContext(ByRef m As B2SheetMemberPlan) As String
+    Dim c As String
+    c = m.RepCtx
+    If Len(m.OutputName) > 0 Then c = c & ",output='" & m.OutputName & "'"
+    If m.ReportIndex > 0 Then c = c & ",report_index=" & CStr(m.ReportIndex)
+    If Len(m.ReportName) > 0 Then c = c & ",report_name='" & m.ReportName & "'"
+    If m.DataFileIndex > 0 Then c = c & ",data_file_index=" & CStr(m.DataFileIndex)
+    If m.DataFileRowIndex > 0 Then c = c & ",data_file_row=" & CStr(m.DataFileRowIndex)
+    If Len(m.RawReportSheetTemplate) > 0 Then c = c & ",raw_report_sheet_template='" & m.RawReportSheetTemplate & "'"
+    B2PlanningContext = c
+End Function
+
+Private Sub FailPlannedSheetNameLength(ByRef m As B2SheetMemberPlan)
+    ' 2637 (D-04/CR-19n..21n): planning-validated worksheet-name length violation.
+    ' Required: effective base name (without numeric suffix), explicit max permitted base length (31 - suffix_length),
+    ' suffix_length/suffix and concrete planned name, output/report/data_file/row context; raw template optional.
+    Dim maxBaseLen As Long
+    Dim msg As String
+    maxBaseLen = 31 - m.SuffixLength
+    If maxBaseLen < 0 Then maxBaseLen = 0
+    msg = "Planned worksheet name exceeds 31 characters (D-04). " & _
+          "Effective base name after substitution/sanitization without numeric suffix: '" & m.EffectiveBaseName & "'. " & _
+          "Maximum permitted base-name length (31 - suffix_length): " & CStr(maxBaseLen) & ". " & _
+          "suffix_length=" & CStr(m.SuffixLength) & ", suffix='" & m.SuffixText & "'. " & _
+          "Concrete planned worksheet name: '" & m.PlannedName & "'."
+    modTreportConfig.Fail 2637, B2PlanningContext(m), msg
+End Sub
+
+Public Sub AssignPlannedSheetNames(ByRef members() As B2SheetMemberPlan)
+    ' OQ-7/CR-05/D-04: base for first member, then base1..base(N-1) in original member order.
+    ' Uses actual suffix length when validating (suffix_length >= 0, including multi-digit).
+    Dim i As Long
+    Dim lb As Long, ub As Long
+    lb = LBound(members)
+    ub = UBound(members)
+    For i = lb To ub
+        If i = lb Then
+            members(i).SuffixText = vbNullString
+            members(i).SuffixLength = 0
+            members(i).PlannedName = members(i).EffectiveBaseName
+        Else
+            members(i).SuffixText = CStr(i - lb)
+            members(i).SuffixLength = Len(members(i).SuffixText)
+            members(i).PlannedName = members(i).EffectiveBaseName & members(i).SuffixText
+        End If
+        If Len(members(i).PlannedName) > 31 Then
+            FailPlannedSheetNameLength members(i)
+        End If
+    Next i
+End Sub
+
+Public Sub BuildOutputSheetPlan(ByRef members() As B2SheetMemberPlan, ByRef groupsByKey As Object, ByRef plannedNames As Object)
+    ' Builds per-output grouping plan and all planned-name map in original member order.
+    ' groupsByKey: key=LCase effective base -> Dictionary with Keys: Key, BaseName, Members(Collection in order)
+    ' plannedNames: key=LCase planned name -> Dictionary info for diagnostics/preflight.
+    Dim i As Long
+    Dim gk As String
+    Dim grp As Object
+    Dim coll As Object
+    Dim info As Object
+    Dim pnKey As String
+
+    For i = LBound(members) To UBound(members)
+        gk = members(i).GroupKey
+        If Not groupsByKey.Exists(gk) Then
+            Set grp = CreateObject("Scripting.Dictionary")
+            grp.CompareMode = vbBinaryCompare
+            grp.Add "Key", gk
+            grp.Add "BaseName", members(i).EffectiveBaseName
+            Set coll = CreateObject("Scripting.Dictionary")
+            coll.CompareMode = vbBinaryCompare
+            grp.Add "Members", coll
+            groupsByKey.Add gk, grp
+        Else
+            Set grp = groupsByKey(gk)
+            Set coll = grp("Members")
+        End If
+        Set coll = grp("Members")
+        coll.Add CStr(coll.Count + 1), CloneB2MemberInfo(members(i))
+
+        pnKey = LCase$(members(i).PlannedName)
+        Set info = CreateObject("Scripting.Dictionary")
+        info.CompareMode = vbBinaryCompare
+        info.Add "PlannedName", members(i).PlannedName
+        info.Add "GroupKey", gk
+        info.Add "BaseName", members(i).EffectiveBaseName
+        info.Add "Context", B2PlanningContext(members(i))
+        info.Add "MemberOrder", CStr(members(i).EmissionOrder)
+        If plannedNames.Exists(pnKey) Then
+            ' Duplicate planned name in current run: fail as collision preflight (2638).
+            FailPlannedNameCollision members(i).PlannedName, "planned in current run", CStr(plannedNames(pnKey)("Context")), _
+                                     "planned in current run", B2PlanningContext(members(i))
+        End If
+        plannedNames.Add pnKey, info
+    Next i
+End Sub
+
+Private Function CloneB2MemberInfo(ByRef m As B2SheetMemberPlan) As Object
+    Dim d As Object
+    Set d = CreateObject("Scripting.Dictionary")
+    d.CompareMode = vbBinaryCompare
+    d.Add "ReportIndex", m.ReportIndex
+    d.Add "DataFileIndex", m.DataFileIndex
+    d.Add "DataFileRowIndex", m.DataFileRowIndex
+    d.Add "EmissionOrder", m.EmissionOrder
+    d.Add "GapRows", m.GapRows
+    d.Add "EffectiveBaseName", m.EffectiveBaseName
+    d.Add "GroupKey", m.GroupKey
+    d.Add "PlannedName", m.PlannedName
+    d.Add "SuffixText", m.SuffixText
+    d.Add "SuffixLength", m.SuffixLength
+    d.Add "OutputName", m.OutputName
+    d.Add "ReportName", m.ReportName
+    d.Add "FileCtx", m.FileCtx
+    d.Add "RepCtx", m.RepCtx
+    d.Add "RawReportSheetTemplate", m.RawReportSheetTemplate
+    Set CloneB2MemberInfo = d
+End Function
+
+Private Sub FailPlannedNameCollision(ByVal conflictingName As String, ByVal classA As String, ByVal ctxA As String, ByVal classB As String, ByVal ctxB As String)
+    ' 2638 (D-06/CR-06/22g): concrete collision preflight.
+    Dim msg As String
+    msg = "Worksheet name collision detected before creating affected worksheets (D-06). " & _
+          "Conflicting worksheet name: '" & conflictingName & "'. " & _
+          "Conflict class: " & classA & " vs " & classB & ". " & _
+          "Context A: " & ctxA & ". Context B: " & ctxB & "."
+    modTreportConfig.Fail 2638, ctxA & "; " & ctxB, msg
+End Sub
+
+Public Sub PreflightPlannedSheetNameCollisions(ByVal outWb As Workbook, ByVal plannedNames As Object, ByVal outCtx As String)
+    ' D-06/CR-06/CR-22g: check existing worksheet names and all planned run names before creating affected worksheets.
+    ' Case-insensitive. Never overwrite/delete/rename.
+    Dim ws As Worksheet
+    Dim existingKey As String
+    Dim planKey As Variant
+    Dim plannedName As String
+    Dim planCtx As String
+
+    If outWb Is Nothing Then
+        modTreportConfig.Fail 2638, outCtx, "Worksheet name collision preflight failed: output workbook is Nothing."
+    End If
+
+    ' Existing workbook worksheets vs planned names.
+    For Each ws In outWb.Worksheets
+        existingKey = LCase$(ws.Name)
+        If plannedNames.Exists(existingKey) Then
+            plannedName = CStr(plannedNames(existingKey)("PlannedName"))
+            planCtx = CStr(plannedNames(existingKey)("Context"))
+            modTreportConfig.Fail 2638, outCtx & ",existing_sheet='" & ws.Name & "'; " & planCtx, _
+                "Worksheet name collision detected before creating affected worksheets (D-06). " & _
+                "Conflicting worksheet name: '" & ws.Name & "'. " & _
+                "Conflict class: existing workbook worksheet vs planned in current run. " & _
+                "Planned context: " & planCtx & "."
+        End If
+    Next ws
+
+    ' Planned-vs-planned duplicates are detected during BuildOutputSheetPlan (2638).
+    ' Keep an explicit pass for defensive completeness (no-op if unique).
+    For Each planKey In plannedNames.Keys
+        plannedName = CStr(plannedNames(planKey)("PlannedName"))
+        planCtx = CStr(plannedNames(planKey)("Context"))
+        If Len(plannedName) = 0 Then
+            modTreportConfig.Fail 2638, outCtx & "; " & planCtx, "Worksheet name collision preflight failed: planned worksheet name is empty."
+        End If
+    Next planKey
+End Sub
+
+Public Function HasCombineGroups(ByVal groupsByKey As Object) As Boolean
+    Dim k As Variant
+    Dim grp As Object
+    Dim coll As Object
+    For Each k In groupsByKey.Keys
+        Set grp = groupsByKey(k)
+        Set coll = grp("Members")
+        If coll.Count > 1 Then
+            HasCombineGroups = True
+            Exit Function
+        End If
+    Next k
+    HasCombineGroups = False
+End Function
+
+Public Function DescribeCombineGroups(ByVal groupsByKey As Object, ByVal outputName As String) As String
+    ' RC-1 diagnostic helper: summarize multi-member groups for fail-fast context.
+    Dim k As Variant
+    Dim grp As Object
+    Dim coll As Object
+    Dim m As Variant
+    Dim mi As Object
+    Dim parts As String
+    Dim detail As String
+    Dim first As Boolean
+    first = True
+    parts = vbNullString
+    For Each k In groupsByKey.Keys
+        Set grp = groupsByKey(k)
+        Set coll = grp("Members")
+        If coll.Count > 1 Then
+            detail = "[output='" & outputName & "',effective_base='" & CStr(grp("BaseName")) & "',group_key='" & CStr(grp("Key")) & "',member_count=" & CStr(coll.Count) & ",members="
+            Dim j As Long
+            For j = 1 To coll.Count
+                Set mi = coll(CStr(j))
+                detail = detail & "{order=" & CStr(mi("EmissionOrder")) & ",df_row=" & CStr(mi("DataFileRowIndex")) & ",report='" & CStr(mi("ReportName")) & "',planned='" & CStr(mi("PlannedName")) & "'}"
+                If j < coll.Count Then detail = detail & ";"
+            Next j
+            detail = detail & "]"
+            If first Then
+                parts = detail
+                first = False
+            Else
+                parts = parts & " | " & detail
+            End If
+        End If
+    Next k
+    DescribeCombineGroups = parts
+End Function
+
+Public Function GetPlannedSheetNameForMember(ByRef members() As B2SheetMemberPlan, ByVal emissionOrder As Long) As String
+    Dim i As Long
+    For i = LBound(members) To UBound(members)
+        If members(i).EmissionOrder = emissionOrder Then
+            GetPlannedSheetNameForMember = members(i).PlannedName
+            Exit Function
+        End If
+    Next i
+    GetPlannedSheetNameForMember = vbNullString
+End Function
+
 
 
 

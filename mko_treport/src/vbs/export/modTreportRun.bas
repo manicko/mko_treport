@@ -74,6 +74,12 @@ Public Sub Create_report()
     Dim eDesc2 As String
     Dim eSrc2 As String
     Dim k As Long
+    Dim outPlanMembers() As Variant
+    Dim outPlanGroups() As Variant
+    Dim outPlanNames() As Variant
+    Dim planCtx As String
+    Dim combineMsg As String
+    Dim emissionOrder As Long
 
     st = modTreportState.CaptureState()
     On Error GoTo EH
@@ -88,9 +94,15 @@ Public Sub Create_report()
     ReDim outBooks(LBound(cfg.Reports) To UBound(cfg.Reports))
     ReDim outNames(LBound(cfg.Reports) To UBound(cfg.Reports))
     ReDim outUsedSheetNames(LBound(cfg.Reports) To UBound(cfg.Reports))
+    ReDim outPlanMembers(LBound(cfg.DataFiles) To UBound(cfg.DataFiles))
+    ReDim outPlanGroups(LBound(cfg.Reports) To UBound(cfg.Reports))
+    ReDim outPlanNames(LBound(cfg.Reports) To UBound(cfg.Reports))
 
-    ' precompute unique trimmed output/report names and create workbooks
+    ' RC-5: output workbook objects may be available for inspection, but no planned report worksheets
+    ' are created before complete per-run/per-output plan set is resolved, length-validated, and
+    ' collision-preflighted (full scan -> build/preflight all plans -> RC-1 gate -> execution/save).
     Set dictNames = CreateObject("Scripting.Dictionary")
+    dictNames.CompareMode = vbBinaryCompare
     For r = LBound(cfg.Reports) To UBound(cfg.Reports)
         rn = modTreportOutput.SanitizeFileName(cfg.Reports(r).Name, "Create_report/reports[row=" & cfg.Reports(r).RowIndex & "]")
         If dictNames.Exists(LCase$(rn)) Then
@@ -99,16 +111,49 @@ Public Sub Create_report()
         dictNames.Add LCase$(rn), True
         outNames(r) = rn
         Set outBooks(r) = Application.Workbooks.Add(xlWBATWorksheet)
-        ' Per-output-workbook namespace for final sheet names across all data_files (D3/D14).
+        ' RC-3: final-produced registry consumed by 2630/CleanupDefaultSheets/EnsureProducedSheetsPresent/save checks.
         Set outUsedSheetNames(r) = CreateObject("Scripting.Dictionary")
+        outUsedSheetNames(r).CompareMode = vbBinaryCompare
+        Set outPlanGroups(r) = CreateObject("Scripting.Dictionary")
+        outPlanGroups(r).CompareMode = vbBinaryCompare
+        Set outPlanNames(r) = CreateObject("Scripting.Dictionary")
+        outPlanNames(r).CompareMode = vbBinaryCompare
     Next r
 
+    ' RC-5 full data_files scan (no report worksheet creation): resolve placeholder max values per df row
+    ' before df filters (basis equivalent to current behavior), collect member records, then close source.
+    emissionOrder = 0
+    For i = LBound(cfg.DataFiles) To UBound(cfg.DataFiles)
+        fileCtx = "Create_report[data_file='" & cfg.DataFiles(i).DataFile & "',row=" & cfg.DataFiles(i).RowIndex & ",sheet='" & cfg.DataFiles(i).DataSheet & "']"
+        Application.StatusBar = "treport: scan " & fileCtx
+        srcPath = modTreportFiles.ResolveDataFilePath(inputFolder, cfg.DataFiles(i).DataFile)
+        Set wbSrc = modTreportFiles.OpenWorkbookReadOnly(srcPath)
+        CollectDataFilePlanMembers cfg, i, wbSrc, srcPath, fileCtx, outNames, outPlanMembers, emissionOrder
+        modTreportFiles.CloseNoSave wbSrc
+        Set wbSrc = Nothing
+    Next i
+
+    ' Build/preflight all output plans (suffix-aware names/length 2637, collisions 2638, grouping).
+    For r = LBound(cfg.Reports) To UBound(cfg.Reports)
+        planCtx = "Create_report/plan[name='" & outNames(r) & "',report_row=" & cfg.Reports(r).RowIndex & "]"
+        BuildOutputPlan r, outPlanMembers, outPlanGroups(r), outPlanNames(r)
+        modTreportOutput.PreflightPlannedSheetNameCollisions outBooks(r), outPlanNames(r), planCtx
+    Next r
+
+    ' RC-1 gate: if any group has GroupSize > 1, fail-fast before creating any Stage 1 report worksheet.
+    combineMsg = BuildCombineGateMessage(outPlanGroups, outNames, LBound(cfg.Reports), UBound(cfg.Reports))
+    If Len(combineMsg) > 0 Then
+        modTreportConfig.Fail 2699, "Create_report/plan/preflight", _
+            "P01 combine groups detected (GroupSize > 1). B3/B4/B5 combine implementation is required before any report worksheet can be created. " & combineMsg
+    End If
+
+    ' RC-2/RC-3: all groups are single-member -> execute Stage 1 semantics in original order with B2-assigned names.
     For i = LBound(cfg.DataFiles) To UBound(cfg.DataFiles)
         fileCtx = "Create_report[data_file='" & cfg.DataFiles(i).DataFile & "',row=" & cfg.DataFiles(i).RowIndex & ",sheet='" & cfg.DataFiles(i).DataSheet & "']"
         Application.StatusBar = "treport: " & fileCtx
         srcPath = modTreportFiles.ResolveDataFilePath(inputFolder, cfg.DataFiles(i).DataFile)
         Set wbSrc = modTreportFiles.OpenWorkbookReadOnly(srcPath)
-        ProcessDataFile cfg, i, wbSrc, srcPath, fileCtx, outBooks, outNames, outputFolder, outUsedSheetNames
+        ExecuteDataFileSingleMember cfg, i, wbSrc, srcPath, fileCtx, outBooks, outNames, outPlanMembers, outUsedSheetNames
         modTreportFiles.CloseNoSave wbSrc
         Set wbSrc = Nothing
     Next i
@@ -149,54 +194,208 @@ EH:
     MsgBox "Create_report failed." & vbCrLf & "Source: " & eSrc2 & vbCrLf & "Error: " & eNum2 & vbCrLf & eDesc2, vbCritical, "treport"
 End Sub
 
-Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal dfIdx As Long, ByVal wbSrc As Workbook, ByVal srcPath As String, ByVal fileCtx As String, ByRef outBooks() As Workbook, ByRef outNames() As String, ByVal outputFolder As String, ByRef outUsedSheetNames() As Object)
+Private Sub CollectDataFilePlanMembers(ByRef cfg As modTreportConfig.TreportConfig, ByVal dfIdx As Long, ByVal wbSrc As Workbook, ByVal srcPath As String, ByVal fileCtx As String, ByRef outNames() As String, ByRef outPlanMembers() As Variant, ByRef emissionOrder As Long)
+    ' RC-5 scan pass: open source read-only (caller), resolve placeholder max values once per df row before
+    ' data_files.filters (equivalent basis), and collect per-emission member records without creating any report worksheet.
+    Dim ws As Worksheet
+    Dim pt As PivotTable
+    Dim placeholderMaxValues As Object
+    Dim r As Long
+    Dim repCtx As String
+    Dim substituted As String
+    Dim effectiveBase As String
+    Dim members() As modTreportOutput.B2SheetMemberPlan
+    Dim ub As Long
+    Dim hasMembers As Boolean
+
+    Set ws = modTreportPivot.GetDataSheet(wbSrc, cfg.DataFiles(dfIdx).DataSheet, fileCtx & ",path='" & srcPath & "'")
+    Set pt = modTreportPivot.GetPrimaryPivot(ws, fileCtx & ",path='" & srcPath & "'")
+    Set placeholderMaxValues = ResolveReportSheetPlaceholderMaxValues(pt, cfg.DataFiles(dfIdx).ReportSheet, fileCtx)
+
+    ub = -1
+    hasMembers = False
+    For r = LBound(cfg.Reports) To UBound(cfg.Reports)
+        emissionOrder = emissionOrder + 1
+        repCtx = fileCtx & ",report='" & cfg.Reports(r).Name & "',report_row=" & cfg.Reports(r).RowIndex
+
+        substituted = modTreportOutput.SubstituteReportSheetPlaceholders(cfg.DataFiles(dfIdx).ReportSheet, placeholderMaxValues, repCtx)
+        effectiveBase = modTreportOutput.ResolveEffectiveBaseSheetName(substituted, repCtx & ",output='" & outNames(r) & "',parameter='report_sheet/data_sheet'", cfg.DataFiles(dfIdx).ReportSheet)
+
+        ub = ub + 1
+        If Not hasMembers Then
+            ReDim members(0 To 0)
+            hasMembers = True
+        Else
+            ReDim Preserve members(0 To ub)
+        End If
+
+        members(ub).ReportIndex = r
+        members(ub).DataFileIndex = dfIdx
+        members(ub).DataFileRowIndex = cfg.DataFiles(dfIdx).RowIndex
+        members(ub).EmissionOrder = emissionOrder
+        members(ub).GapRows = cfg.DataFiles(dfIdx).gapRows
+        members(ub).EffectiveBaseName = effectiveBase
+        members(ub).GroupKey = modTreportOutput.MakeSheetGroupKey(effectiveBase)
+        members(ub).PlannedName = vbNullString
+        members(ub).SuffixText = vbNullString
+        members(ub).SuffixLength = 0
+        members(ub).OutputName = outNames(r)
+        members(ub).ReportName = cfg.Reports(r).Name
+        members(ub).FileCtx = fileCtx
+        members(ub).RepCtx = repCtx
+        members(ub).RawReportSheetTemplate = cfg.DataFiles(dfIdx).ReportSheet
+    Next r
+
+    If hasMembers Then
+        outPlanMembers(dfIdx) = members
+    Else
+        outPlanMembers(dfIdx) = Empty
+    End If
+End Sub
+
+Private Sub AppendReportMembers(ByRef allMembers() As modTreportOutput.B2SheetMemberPlan, ByRef hasAll As Boolean, ByRef dfMembers() As modTreportOutput.B2SheetMemberPlan, ByVal reportIdx As Long)
+    Dim i As Long
+    Dim ub As Long
+    For i = LBound(dfMembers) To UBound(dfMembers)
+        If dfMembers(i).ReportIndex = reportIdx Then
+            If Not hasAll Then
+                ReDim allMembers(0 To 0)
+                hasAll = True
+                ub = 0
+            Else
+                ub = UBound(allMembers) + 1
+                ReDim Preserve allMembers(0 To ub)
+            End If
+            allMembers(UBound(allMembers)) = dfMembers(i)
+        End If
+    Next i
+End Sub
+
+Private Sub BuildOutputPlan(ByVal reportIdx As Long, ByRef dfMembersByDf As Variant, ByVal groupsByKey As Object, ByVal plannedNames As Object)
+    ' Build per-output plan in original data_files/emission order across all df rows for this report.
+    Dim allMembers() As modTreportOutput.B2SheetMemberPlan
+    Dim hasAll As Boolean
+    Dim i As Long
+    Dim members() As modTreportOutput.B2SheetMemberPlan
+    Dim gk As Variant
+    Dim grp As Object
+    Dim coll As Object
+    Dim j As Long
+    Dim groupMembers() As modTreportOutput.B2SheetMemberPlan
+    Dim mi As Object
+
+    hasAll = False
+    For i = LBound(dfMembersByDf) To UBound(dfMembersByDf)
+        If IsEmpty(dfMembersByDf(i)) Then GoTo ContinueDf
+        members = dfMembersByDf(i)
+        AppendReportMembers allMembers, hasAll, members, reportIdx
+ContinueDf:
+    Next i
+
+    If Not hasAll Then Exit Sub
+
+    ' Stage 1 grouping seed in emission order, then assign planned names per group in that order.
+    For i = LBound(allMembers) To UBound(allMembers)
+        gk = allMembers(i).GroupKey
+        If Not groupsByKey.Exists(CStr(gk)) Then
+            Set grp = CreateObject("Scripting.Dictionary")
+            grp.CompareMode = vbBinaryCompare
+            grp.Add "Key", CStr(gk)
+            grp.Add "BaseName", allMembers(i).EffectiveBaseName
+            Set coll = CreateObject("Scripting.Dictionary")
+            coll.CompareMode = vbBinaryCompare
+            grp.Add "Members", coll
+            groupsByKey.Add CStr(gk), grp
+        End If
+        Set grp = groupsByKey(CStr(gk))
+        Set coll = grp("Members")
+        coll.Add CStr(coll.Count + 1), i
+    Next i
+
+    ' Assign suffix-aware planned names and validate lengths (2637) per group in original order.
+    For Each gk In groupsByKey.Keys
+        Set grp = groupsByKey(CStr(gk))
+        Set coll = grp("Members")
+        ReDim groupMembers(0 To coll.Count - 1)
+        For j = 1 To coll.Count
+            groupMembers(j - 1) = allMembers(CLng(coll(CStr(j))))
+        Next j
+        modTreportOutput.AssignPlannedSheetNames groupMembers
+        For j = 1 To coll.Count
+            allMembers(CLng(coll(CStr(j)))) = groupMembers(j - 1)
+        Next j
+    Next gk
+
+    ' Build final planned-name map and replace group member payloads with cloned plan info dictionaries.
+    groupsByKey.RemoveAll
+    modTreportOutput.BuildOutputSheetPlan allMembers, groupsByKey, plannedNames
+End Sub
+
+Private Function BuildCombineGateMessage(ByRef outPlanGroups() As Variant, ByRef outNames() As String, ByVal lb As Long, ByVal ub As Long) As String
+    Dim r As Long
+    Dim msg As String
+    Dim part As String
+    msg = vbNullString
+    For r = lb To ub
+        If modTreportOutput.HasCombineGroups(outPlanGroups(r)) Then
+            part = modTreportOutput.DescribeCombineGroups(outPlanGroups(r), outNames(r))
+            If Len(msg) = 0 Then
+                msg = part
+            Else
+                msg = msg & " || " & part
+            End If
+        End If
+    Next r
+    BuildCombineGateMessage = msg
+End Function
+
+Private Sub ExecuteDataFileSingleMember(ByRef cfg As modTreportConfig.TreportConfig, ByVal dfIdx As Long, ByVal wbSrc As Workbook, ByVal srcPath As String, ByVal fileCtx As String, ByRef outBooks() As Workbook, ByRef outNames() As String, ByRef outPlanMembers() As Variant, ByRef outUsedSheetNames() As Object)
+    ' RC-2 execution pass (single-member groups only): preserve existing Stage 1 semantics/order.
+    ' Reopen source read-only per df row (caller), obtain pivot, apply df/report filters in same order,
+    ' enforce 2410, compute placement, prepare target with B2-assigned planned name, snapshot/format/grouping,
+    ' and register created final sheet in final-produced registry (RC-3). 2612 unreachable for same-base grouping.
     Dim ws As Worksheet
     Dim pt As PivotTable
     Dim pf As ParsedFilters
     Dim r As Long
     Dim rc As modTreportFilters.ResolvedContext
-    Dim sheetName As String
+    Dim repCtx As String
     Dim outWs As Worksheet
     Dim pr As Long, pc As Long
-    Dim repCtx As String
-    Dim placeholderMaxValues As Object
     Dim insertedRng As Range
+    Dim plannedName As String
+    Dim dfMembers() As modTreportOutput.B2SheetMemberPlan
+    Dim i As Long
+
+    If IsEmpty(outPlanMembers(dfIdx)) Then Exit Sub
+    dfMembers = outPlanMembers(dfIdx)
 
     Set ws = modTreportPivot.GetDataSheet(wbSrc, cfg.DataFiles(dfIdx).DataSheet, fileCtx & ",path='" & srcPath & "'")
     Set pt = modTreportPivot.GetPrimaryPivot(ws, fileCtx & ",path='" & srcPath & "'")
 
-    ' B3/D1/D2/D7/D11 (rev.7): resolve report_sheet <max_<field>> and <max-N_<field>> values once per
-    ' data_files row from the row pivot/data context (available numeric-convertible field items) BEFORE applying
-    ' any data_files.filters or per-report filters, independent of filter clause derivation/representatives.
-    Set placeholderMaxValues = ResolveReportSheetPlaceholderMaxValues(pt, cfg.DataFiles(dfIdx).ReportSheet, fileCtx)
-
     pf = modTreportFilters.ParseAndClassify(cfg.DataFiles(dfIdx).Filters, cfg.General.Delimeter, fileCtx)
-    ' T2/D10: resolve global per-field min/max context before applying clauses (independent of other clauses).
     rc = modTreportFilters.ResolveFilterContext(pt, pf, fileCtx)
-
-    ' Apply data-file filters once (D8), deterministic AND in declared clause order.
     modTreportFilters.ApplyDataFileFilters pt, pf, cfg.General.Delimeter, rc, fileCtx
 
     For r = LBound(cfg.Reports) To UBound(cfg.Reports)
         repCtx = fileCtx & ",report='" & cfg.Reports(r).Name & "',report_row=" & cfg.Reports(r).RowIndex
 
-        ' Per-report filters use the uniform selection rule (no warn-and-skip on none-match).
         modTreportFilters.ApplyReportFilters pt, cfg.Reports(r), cfg.General.Delimeter, repCtx
 
-        ' Fail fast when the filter combination yields no presented data.
         If modTreportPivot.IsPivotDataEmpty(pt) Then
             modTreportConfig.Fail 2410, repCtx, "Filter combination yielded no data."
         End If
 
-        sheetName = modTreportOutput.SubstituteReportSheetPlaceholders(cfg.DataFiles(dfIdx).ReportSheet, placeholderMaxValues, repCtx)
-        sheetName = modTreportOutput.SanitizeSheetName(sheetName, repCtx)
-        ' D14: fail fast on true collision within the same output workbook namespace;
-        ' identical final names across different output workbooks are allowed (D-01).
-        If outUsedSheetNames(r).Exists(LCase$(sheetName)) Then
-            modTreportConfig.Fail 2612, repCtx & ",output='" & outNames(r) & ",data_sheet='" & sheetName & "',parameter='report_sheet/data_sheet'", _
-                "Sheet name collision in output workbook after substitution/sanitization: '" & sheetName & "'."
+        plannedName = vbNullString
+        For i = LBound(dfMembers) To UBound(dfMembers)
+            If dfMembers(i).ReportIndex = r Then
+                plannedName = dfMembers(i).PlannedName
+                Exit For
+            End If
+        Next i
+        If Len(plannedName) = 0 Then
+            modTreportConfig.Fail 2698, repCtx & ",output='" & outNames(r) & "'", "Internal planning error: missing B2 planned sheet name for emission."
         End If
-        outUsedSheetNames(r).Add LCase$(sheetName), True
 
         pr = 1: pc = 1
         If isNumeric(cfg.DataFiles(dfIdx).pasteRow) And Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).pasteRow)) > 0 Then pr = CLng(cfg.DataFiles(dfIdx).pasteRow)
@@ -204,11 +403,17 @@ Private Sub ProcessDataFile(ByRef cfg As modTreportConfig.TreportConfig, ByVal d
         If pr <= 0 Then pr = 1
         If pc <= 0 Then pc = 1
 
-        Set outWs = modTreportOutput.PrepareTargetSheet(outBooks(r), sheetName, cfg.DataFiles(dfIdx).template, repCtx)
+        Set outWs = modTreportOutput.PrepareTargetSheet(outBooks(r), plannedName, cfg.DataFiles(dfIdx).template, repCtx)
         Set insertedRng = modTreportExtract.CopyPivotSnapshot(pt, outWs, pr, pc, repCtx, cfg.DataFiles(dfIdx).onlyValues, cfg.DataFiles(dfIdx).insertRows, cfg.DataFiles(dfIdx).skipHeader, (Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).template)) > 0))
         modTreportExtract.ApplySheetFormatting outWs, cfg.DataFiles(dfIdx).freezeRow, cfg.DataFiles(dfIdx).freezeCol, cfg.DataFiles(dfIdx).Zoom, repCtx, _
             (Len(modTreportConfig.Norm(cfg.DataFiles(dfIdx).template)) > 0)
-        modTreportExtract.ApplyOutlineGrouping insertedRng, cfg.DataFiles(dfIdx).GroupRows, cfg.General.rowsCollapsed, repCtx & ",output='" & outNames(r) & "',data_sheet='" & sheetName & "'"
+        modTreportExtract.ApplyOutlineGrouping insertedRng, cfg.DataFiles(dfIdx).GroupRows, cfg.General.rowsCollapsed, repCtx & ",output='" & outNames(r) & "',data_sheet='" & plannedName & "'"
+
+        ' RC-3: register created final/base sheet in final-produced registry (case-insensitive) for 2630/cleanup/verify/save.
+        If Not outUsedSheetNames(r).Exists(LCase$(plannedName)) Then
+            outUsedSheetNames(r).Add LCase$(plannedName), True
+        End If
+
         Set insertedRng = Nothing
         Set outWs = Nothing
     Next r
