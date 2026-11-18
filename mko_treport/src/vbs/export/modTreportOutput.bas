@@ -6,6 +6,36 @@ Option Explicit
 ' resolved per data_files row from the row pivot/data context, independent of data_files.filters
 ' derivation/representatives. Grammar-aware, exact-token substitution, legacy/malformed/remnant fail-fast.
 
+' =========================
+' B2 (P01): naming/group planning and collision preflight
+' RC-1..RC-5, D-03/D-04/D-06/OQ-7, CR-01..CR-03/CR-05/CR-06/CR-07/CR-19n..CR-21n/CR-22g/CR-23g
+' =========================
+
+Public Type B2SheetMemberPlan
+    ReportIndex As Long
+    DataFileIndex As Long
+    DataFileRowIndex As Long
+    EmissionOrder As Long
+    GapRows As Long
+    EffectiveBaseName As String
+    GroupKey As String
+    PlannedName As String
+    SuffixText As String
+    SuffixLength As Long
+    OutputName As String
+    ReportName As String
+    FileCtx As String
+    RepCtx As String
+    RawReportSheetTemplate As String
+End Type
+
+Public Type B2SheetGroupPlan
+    GroupKey As String
+    EffectiveBaseName As String
+    MemberCount As Long
+    Members() As B2SheetMemberPlan
+End Type
+
 Public Function SanitizeSheetName(ByVal nameIn As String, ByVal ctx As String) As String
     Dim s As String, i As Long, ch As String, bad As String
     s = modTreportConfig.Norm(nameIn)
@@ -502,36 +532,6 @@ Public Sub EnsureProducedSheetsPresent(ByVal outWb As Workbook, ByVal producedSh
         End If
     Next k
 End Sub
-
-' =========================
-' B2 (P01): naming/group planning and collision preflight
-' RC-1..RC-5, D-03/D-04/D-06/OQ-7, CR-01..CR-03/CR-05/CR-06/CR-07/CR-19n..CR-21n/CR-22g/CR-23g
-' =========================
-
-Public Type B2SheetMemberPlan
-    ReportIndex As Long
-    DataFileIndex As Long
-    DataFileRowIndex As Long
-    EmissionOrder As Long
-    GapRows As Long
-    EffectiveBaseName As String
-    GroupKey As String
-    PlannedName As String
-    SuffixText As String
-    SuffixLength As Long
-    OutputName As String
-    ReportName As String
-    FileCtx As String
-    RepCtx As String
-    RawReportSheetTemplate As String
-End Type
-
-Public Type B2SheetGroupPlan
-    GroupKey As String
-    EffectiveBaseName As String
-    MemberCount As Long
-    Members() As B2SheetMemberPlan
-End Type
 
 Public Function NormalizeSheetNameChars(ByVal nameIn As String) As String
     ' D-03/CR-01: apply existing sanitization character rules without length validation.

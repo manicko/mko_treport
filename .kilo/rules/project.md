@@ -26,6 +26,9 @@
 9. **VBA Identifier Safety**  
    VBA identifiers are case-insensitive. Before adding or renaming any variable, constant, procedure, parameter, type, or other identifier in VBA, verify that the chosen name (in any letter case or abbreviation form) does not collide with a VBA reserved keyword, statement, built-in function, type, or object name (for example, `eNum` is interpreted as `Enum`). Use a distinct, non-reserved name to avoid compile-time syntax errors.
 
+10. **VBA Declaration Placement**  
+    In VBA modules, all `Option` statements, `Const`, `Dim`/`Public`/`Private` module-level declarations, `Type`, and `Enum` blocks must appear in the module's declarations section before the first `Sub`, `Function`, or `Property` procedure. Placing `Type`/`Enum` definitions after procedures causes compile errors (e.g. "User-defined type not defined") and must be avoided.
+
 17. **Workspace Cleanliness**  
     Before creating any file, ask: 1) Is there an exact place for this in the task or module architecture? 2) Is it needed for project operation and future maintenance? If both are no — write only to `.ai/tmp`.
 
