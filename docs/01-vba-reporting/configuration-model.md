@@ -35,6 +35,7 @@ Defines the configuration model that drives treport behavior: the `settings` wor
 | `output_path` | Folder for generated report workbooks. | Required, non-empty; readiness/creation checks apply. |
 | `delimeter` | Delimiter used by filter list expressions. | Required, non-empty (spelling follows implementation/config contract). |
 | `rows_collapsed` | Default collapsed state for Outline row groups created from `data_files.group_rows`. | Optional. Absent, blank, or `False`/`0`/`No` => expanded (default). `True`/`1`/`Yes` => collapsed readiness/behavior as implemented. Any other present non-blank value fails config validation with context. |
+| `report_rows_limit_general` | Global per-subreport row limit applied during combine validation. | **Required (P01).** Explicitly configured positive integer (`>= 1`), Long-compatible, no fractional/Boolean/error/non-numeric/blank/duplicate values and no fallback/default/override. Applied independently to every prepared subreport worksheet in a combine group (including the base/first subreport) against that worksheet's `UsedRange.Rows.Count` before append; it is **not** applied to the total combined report. Projected final combined worksheet dimensions are validated separately against Excel limits before each append paste. Missing/invalid values fail fast with contextual diagnostics. |
 
 ### `reports`
 
@@ -52,8 +53,9 @@ Rows define source data and sheet/output processing in order.
 |---|---|---|
 | `data_file` | Source workbook identifier/base name to resolve. | Required, non-empty. |
 | `data_sheet` | Sheet containing the source pivot/data context. | Required, non-empty. |
-| `report_sheet` | Output sheet name template for this data file. | Required, non-empty; supports placeholder substitution. |
+| `report_sheet` | Output sheet name template for this data file (effective base name before combine suffixing). | Required, non-empty; supports placeholder substitution. After placeholder resolution and sanitization, rows that produce the same effective base worksheet name (case-insensitive) within the **same output workbook** form a combine group in original `data_files` emission order (P01). |
 | `filters` | Filter DSL applied at data-file scope. | Required, non-empty (may contain clauses per DSL). |
+| `gap_rows` | Spacing rows inserted before this subreport when appended into a combined worksheet. | **Optional (P01).** If the `gap_rows` column is absent, default is `0` for all rows. If present: blank/empty/null => `0`; accepted values are integers `>= 0` (Long-compatible, non-fractional/non-Boolean/non-error/non-negative). Invalid values fail fast with contextual diagnostics. The first/base subreport in a combine group starts the sheet, so its `gap_rows` is ignored during combine. |
 | `paste_row` | Target row for snapshot paste/layout. | Layout input; defaults may apply in implementation. For `insert_rows=FALSE` and legacy/non-template `insert_rows=TRUE` (P05) this is the final first row of inserted data. For template-scoped P09 `insert_rows=TRUE` (template set), actual snapshot top becomes `paste_row-1` (requires `paste_row >= 2`) and final first row is expected `paste_row-1` (A1 L3-verified). |
 | `paste_col` | Target column for snapshot paste/layout. | Layout input; defaults may apply in implementation. |
 | `freeze_row` | Freeze panes row setting. | Optional/layout control. If explicitly set by report/data-file settings, it overrides template display state for freeze panes. |
@@ -83,12 +85,13 @@ Rows define source data and sheet/output processing in order.
 Implemented/expected behavior at a high level (see `modTreportConfig`, `modTreportRun`, `modTreportOutput`):
 
 - **Required structures**: `settings` sheet and required ListObjects/columns must exist; missing/invalid structures fail fast with contextual errors.
-- **Required values**: key fields in `general`, `reports`, and `data_files` must be non-empty after normalization.
+- **Required values**: key fields in `general`, `reports`, and `data_files` must be non-empty after normalization. `general.report_rows_limit_general` is required and must be explicitly provided as a positive integer (no default/fallback/override).
 - **Normalization**: `Norm` trims and normalizes null/empty/error-like inputs.
 - **Optional P04/P07 boolean/string fields**: `template`, `only_values`, `insert_rows`, `skip_header` are optional in `data_files` (backward compatible when columns are absent). Absent column or blank/empty/null values use defaults (`template` empty, booleans `False`). Accepted boolean tokens (trimmed, case-insensitive): `TRUE` = `TRUE`/`1`/`YES` or Excel Boolean `True`; `FALSE` = `FALSE`/`0`/`NO` or Excel Boolean `False`. Non-empty unknown/error values fail config validation with contextual diagnostics (row/data_file/data_sheet/parameter/raw value/expectation). No `height`/`width` config columns are required (snapshot size is runtime-derived).
+- **Optional P01 combine spacing field**: `data_files.gap_rows` is optional. If the column is absent, every row defaults to `0`. If present, blank/empty/null => `0`; otherwise only integer values `>= 0` are accepted (stored as Long). Invalid values fail fast with contextual diagnostics.
 - **Path handling**: input/output paths are normalized/validated; output readiness checks are enforced.
-- **Naming rules**: report/file and sheet names are sanitized and constrained (including Excel sheet name length considerations) with collision checks.
-- **Fail-fast collisions**: naming/sheet collisions are treated as errors (scope and exact behavior described in [Pipeline and data flow](./pipeline-and-dataflow.md)); successful-run evidence may be blocked by dataset/config collisions. For P04 target preparation, existing target sheet name conflicts in the output workbook fail fast (no overwrite/delete) with contextual diagnostics.
+- **Naming/planning rules (P01)**: `report_sheet` names are resolved (placeholders/substitutions) then sanitized to an effective base worksheet name. Members with the same case-insensitive effective base name within the same output workbook form one combine group in original `data_files`/report emission order. Planned worksheet names are `base` for the first member and `base1..base(N-1)` for subsequent members in order (actual suffix length used). Planned-name length is validated against Excel's 31-character limit before affected worksheet creation; length violations are reported with suffix-aware diagnostics (effective base name without suffix and maximum permitted base length `31 - suffix_length`).
+- **Fail-fast collisions (P01)**: before creating affected report worksheets, planned names are preflighted against existing output-workbook worksheet names and all names planned for the current run (case-insensitive), including default sheets. Conflicts fail fast with contextual diagnostics and **no** overwrite/delete/rename resolution. Unused default worksheets may still be removed later only when they do not conflict and are not produced finals (see [Pipeline and data flow](./pipeline-and-dataflow.md)).
 
 ## Placeholders and Substitution
 

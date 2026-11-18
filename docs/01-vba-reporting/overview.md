@@ -36,14 +36,16 @@ Describes the treport VBA reporting subsystem: a configuration-driven Excel macr
 - Parsing/applying filter DSL and derived period/`report_sheet` placeholder resolution (including offset forms).
 - Applying pivot filters and extracting static report snapshots into output workbooks.
 - Preparing output target sheets (plain or `template`-based from `ThisWorkbook`), transferring snapshots (`only_values`, `skip_header`) with configurable insertion/row-preparation modes (`insert_rows`, including template-scoped rework semantics), and applying layout/formatting.
+- Per-output worksheet name planning and preflight for report generation: resolve/sanitize effective base names, group same-base subreports case-insensitively in original order, assign suffix-aware planned names, and fail fast on length/collision issues before affected worksheet creation.
+- Two-stage `Create_report` assembly for multi-subreport groups: prepare each subreport on its own worksheet, then append prepared temps into the base/final worksheet with configured spacing/limits/bounds checks and required transfer/lifecycle behavior.
 - Bounds-scoped Outline row grouping driven by `data_files.group_rows` with `general.rows_collapsed` control.
-- Output workbook finalization (including removal of unproduced default sheets on successful completion paths with produced-sheet guards) and save/collision handling.
+- Output workbook finalization (including temp cleanup after successful combine, removal of unproduced default sheets on successful completion paths with produced-sheet guards) and save/collision handling.
 - Deterministic validation/fail-fast diagnostics and application-state restore/cleanup intent.
 
 **Out of scope:**
 - External runtime services or non-VBA end-user execution dependencies.
 
-**Implemented extensions in current exports (P01/P04/P05/P07/P09, runtime-unverified):** `max-N` offsets in `data_files.filters` and `report_sheet` placeholders with deterministic bounds/domain validation; default-sheet cleanup with produced-sheet guards; template-based output sheets with `only_values`, `insert_rows` (legacy/non-template and template-scoped anchor rework) and `skip_header` snapshot handling; and `group_rows`/`rows_collapsed` Outline grouping. End-to-end behavior remains subject to manual L2 compile and L3 runtime verification on working copies (dataset-specific correctness, including `report_wclip` pivot/period semantics, not proven in this audit).
+**Implemented extensions in current exports (P01/P04/P05/P07/P09, runtime-unverified):** `max-N` offsets in `data_files.filters` and `report_sheet` placeholders with deterministic bounds/domain validation; P01 combine-on-one-worksheet support (including `data_files.gap_rows`, required `general.report_rows_limit_general`, suffix-aware planned naming/collision preflight, two-stage prepare-then-combine flow, per-subreport/bounds validations, transfer/lifecycle handling, and produced-sheet/finalization guards); default-sheet cleanup with produced-sheet guards; template-based output sheets with `only_values`, `insert_rows` (legacy/non-template and template-scoped anchor rework) and `skip_header` snapshot handling; and `group_rows`/`rows_collapsed` Outline grouping. End-to-end behavior remains subject to manual L2 compile and L3 runtime verification on working copies (dataset-specific correctness, including combine/fidelity/limit/collision scenarios and `report_wclip` pivot/period semantics, not proven in this audit).
 
 ## Component Overview
 
@@ -51,14 +53,14 @@ Primary VBA modules under `mko_treport/src/vbs/export/` (authoritative code snap
 
 | Module | Responsibility (high-level) |
 |---|---|
-| `modTreportRun.bas` | Orchestration, entry points (`Refresh_data`, `Create_report`), per-data-file processing, user-facing outcomes/status. |
-| `modTreportConfig.bas` | Configuration reading, normalization/Trim, schema/value validation, path checks, contextual fail-fast. |
+| `modTreportRun.bas` | Orchestration, entry points (`Refresh_data`, `Create_report`), scan/plan/preflight, Stage 1 preparation, Stage 2 combine/finalization sequencing, per-output lifecycle guards, and user-facing outcomes/status. |
+| `modTreportConfig.bas` | Configuration reading, normalization/Trim, schema/value validation (including P01 config fields), path checks, contextual fail-fast. |
 | `modTreportFiles.bas` | Source workbook resolution and workbook open/close/save session handling. |
 | `modTreportRefresh.bas` | Best-effort synchronous refresh of connections/queries/pivot caches before persisted save. |
 | `modTreportFilters.bas` | Filter DSL parsing/classification, min/max and period/placeholder resolution, data/report filter application. |
 | `modTreportPivot.bas` | Pivot/field lookup, availability and placement handling, field selection, no-data heuristics. |
-| `modTreportExtract.bas` | Presented-range detection and static snapshot copy with formatting/layout application. |
-| `modTreportOutput.bas` | Placeholder substitution, name sanitization/collision checks, sheet/workbook creation/replacement/save. |
+| `modTreportExtract.bas` | Presented-range detection, Stage 1 snapshot copy/formatting/outline application, and Stage 2 combine validations/append transfer helpers. |
+| `modTreportOutput.bas` | Placeholder substitution, effective-name planning/suffix-aware validation and collision preflight, sheet/workbook preparation, temp-finalization/cleanup/save helpers. |
 | `modTreportState.bas` | Capture/apply/restore Excel application state around runs. |
 | `Sheet1.cls`, `Sheet2.cls`, `ThisWorkbook.cls` | Workbook/sheet document modules (minimal exported class shells). |
 
@@ -67,7 +69,7 @@ Data/control flow details are documented in [Pipeline and data flow](./pipeline-
 ## Runtime Verification Status
 
 - **Workbook binaries not inspectable in this audit**: `data/theiss/treport.xlsm`, `mko_treport/src/xls/treport.xlsm`, and `mko_treport/src/vbs/vbaProject.bin` cannot be reliably inspected for embedded VBA, control bindings, or live configuration from text tooling.
-- **Runtime unproven**: end-to-end `Refresh_data`/`Create_report` execution, Power Query/pivot persistence, pivot filter behavior (including P01/runtime cases), snapshot fidelity, output correctness, and build/compile acceptance are not evidenced by this documentation pass.
+- **Runtime unproven**: end-to-end `Refresh_data`/`Create_report` execution, Power Query/pivot persistence, pivot filter behavior, P01 combine/naming/limit/bounds/transfer/cleanup behavior, snapshot/output fidelity, and build/compile acceptance are not evidenced by this documentation pass.
 - **Test evidence limitation**: `mko_treport/tests/` currently contains only `__pycache__` artifacts (no `.py` sources), so it is not evidentiary for current VBA behavior.
 - **Source of truth for this doc**: current exported VBA modules/scripts and specification/planning context; discrepancies and open verification items are tracked outside governed docs (e.g. `.ai/audit/problems`, `.ai/reports`).
 
