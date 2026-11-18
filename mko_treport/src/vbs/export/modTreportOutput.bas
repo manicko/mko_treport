@@ -798,39 +798,440 @@ Public Function GetPlannedSheetNameForMember(ByRef members() As B2SheetMemberPla
     GetPlannedSheetNameForMember = vbNullString
 End Function
 
+' =========================
+' B5 (P01): combined-group finalization — temp deletion and final/base registry reconciliation
+' CR-18c, D-06/CR-22g. Runs only after successful B4 combine per group, before cleanup/verify/save.
+' Fail-fast: 2698 for precondition/invariant/registry/state-resolution (no destructive side effects for detectable incoherence),
+' 2696 for delete/verify/COM failures. No temp deletion before successful B4; no temps in finalProducedNames; no save/cleanup/verify.
+' =========================
 
+Private Function B5DictHas(ByVal d As Object, ByVal key As String) As Boolean
+    On Error Resume Next
+    If d Is Nothing Then
+        B5DictHas = False
+    Else
+        B5DictHas = d.Exists(key)
+    End If
+    On Error GoTo 0
+End Function
 
+Private Function B5DictStr(ByVal d As Object, ByVal key As String, ByVal defaultValue As String) As String
+    On Error Resume Next
+    If B5DictHas(d, key) Then
+        B5DictStr = CStr(d(key))
+    Else
+        B5DictStr = defaultValue
+    End If
+    If Err.Number <> 0 Then B5DictStr = defaultValue
+    On Error GoTo 0
+End Function
 
+Private Function B5DictLong(ByVal d As Object, ByVal key As String, ByVal defaultValue As Long) As Long
+    On Error Resume Next
+    If B5DictHas(d, key) Then
+        B5DictLong = CLng(d(key))
+    Else
+        B5DictLong = defaultValue
+    End If
+    If Err.Number <> 0 Then B5DictLong = defaultValue
+    On Error GoTo 0
+End Function
 
+Private Function B5DictBool(ByVal d As Object, ByVal key As String, ByVal defaultValue As Boolean) As Boolean
+    On Error Resume Next
+    If B5DictHas(d, key) Then
+        B5DictBool = CBool(d(key))
+    Else
+        B5DictBool = defaultValue
+    End If
+    If Err.Number <> 0 Then B5DictBool = defaultValue
+    On Error GoTo 0
+End Function
 
+Private Function B5NormName(ByVal s As String) As String
+    B5NormName = LCase$(Trim$(s))
+End Function
 
+Private Function B5SafeWsName(ByVal ws As Worksheet) As String
+    On Error Resume Next
+    If ws Is Nothing Then
+        B5SafeWsName = "<Nothing>"
+    Else
+        B5SafeWsName = ws.Name
+    End If
+    If Err.Number <> 0 Then B5SafeWsName = "<unavailable>"
+    On Error GoTo 0
+End Function
 
+Private Function B5WorksheetBelongsToWorkbook(ByVal wb As Workbook, ByVal ws As Worksheet) As Boolean
+    Dim parentWb As Workbook
+    B5WorksheetBelongsToWorkbook = False
+    If wb Is Nothing Or ws Is Nothing Then Exit Function
+    On Error Resume Next
+    Set parentWb = ws.Parent
+    If Err.Number = 0 Then
+        If Not parentWb Is Nothing Then
+            B5WorksheetBelongsToWorkbook = (parentWb Is wb)
+        End If
+    End If
+    Err.Clear
+    On Error GoTo 0
+End Function
 
+Private Function B5ResolveWorksheetInWorkbook(ByVal wb As Workbook, ByVal mi As Object, ByVal plannedName As String) As Worksheet
+    Dim ws As Worksheet
+    Dim wsByName As Worksheet
 
+    Set B5ResolveWorksheetInWorkbook = Nothing
+    If wb Is Nothing Then Exit Function
 
+    ' Prefer runtime worksheet reference only when it is a valid sheet in the expected workbook.
+    Set ws = Nothing
+    On Error Resume Next
+    If B5DictHas(mi, "Sheet") Then Set ws = mi("Sheet")
+    If Err.Number <> 0 Then Set ws = Nothing
+    Err.Clear
+    On Error GoTo 0
+    If Not ws Is Nothing Then
+        If B5WorksheetBelongsToWorkbook(wb, ws) Then
+            If Len(plannedName) = 0 Or StrComp(ws.Name, plannedName, vbTextCompare) = 0 Then
+                Set B5ResolveWorksheetInWorkbook = ws
+                Exit Function
+            End If
+            ' Runtime ref is in workbook but name differs; allow fallback by planned name if consistent object exists.
+        Else
+            Set ws = Nothing
+        End If
+    End If
 
+    If Len(plannedName) > 0 Then
+        Set wsByName = FindWorksheetCaseInsensitive(wb, plannedName)
+        If Not wsByName Is Nothing Then
+            Set B5ResolveWorksheetInWorkbook = wsByName
+            Exit Function
+        End If
+    End If
 
+    ' Last resort: runtime ref in workbook even if name differs and planned lookup failed.
+    If Not ws Is Nothing Then
+        If B5WorksheetBelongsToWorkbook(wb, ws) Then Set B5ResolveWorksheetInWorkbook = ws
+    End If
+End Function
 
+Private Function B5CommonGroupCtx(ByVal ctx As String, ByVal groupRecord As Object, ByVal outputName As String) As String
+    B5CommonGroupCtx = ctx & ",output='" & outputName & "'" & _
+        ",effective_base='" & B5DictStr(groupRecord, "BaseName", vbNullString) & "'" & _
+        ",group_key='" & B5DictStr(groupRecord, "GroupKey", vbNullString) & "'"
+End Function
 
+Private Function B5MemberCtx(ByVal mi As Object, ByVal groupRecord As Object, ByVal memberIndex As Long, ByVal resolvedName As String) As String
+    Dim s As String
+    s = ",member_index=" & CStr(memberIndex) & _
+        ",is_base=" & CStr(B5DictBool(mi, "IsBase", (memberIndex = 1))) & _
+        ",is_temp=" & CStr(B5DictBool(mi, "IsTemp", (memberIndex > 1))) & _
+        ",prepared=" & CStr(B5DictBool(mi, "Prepared", False)) & _
+        ",planned_sheet='" & B5DictStr(mi, "PlannedName", vbNullString) & "'" & _
+        ",member_group_key='" & B5DictStr(mi, "GroupKey", vbNullString) & "'" & _
+        ",emission_order=" & CStr(B5DictLong(mi, "EmissionOrder", 0)) & _
+        ",report_index=" & CStr(B5DictLong(mi, "ReportIndex", 0)) & _
+        ",data_file_index=" & CStr(B5DictLong(mi, "DataFileIndex", 0)) & _
+        ",data_file_row=" & CStr(B5DictLong(mi, "DataFileRowIndex", 0))
+    If Len(resolvedName) > 0 Then s = s & ",actual_sheet_name='" & resolvedName & "'"
+    B5MemberCtx = s
+End Function
 
+Private Sub B5FailInvariant(ByVal ctx As String, ByVal msg As String)
+    modTreportConfig.Fail 2698, ctx & ",operation='b5_finalize'", msg
+End Sub
 
-
-
-
+Private Sub B5FailDelete(ByVal ctx As String, ByVal msg As String)
+    modTreportConfig.Fail 2696, ctx & ",operation='b5_finalize'", msg
+End Sub
 
 Public Sub FinalizeCombinedGroupTemps(ByVal outBook As Workbook, ByVal groupRecord As Object, ByVal finalProducedNames As Object, ByVal ctx As String)
-    ' B3 hook contract (B5 not implemented): fail-fast before cleanup/verify/save; no side effects implying success.
-    ' Must run only after successful B4 combine; temps must not be deleted here in B3 stub.
-    Dim baseName As String
+    ' B5: delete temp worksheets only after successful B4 combine and reconcile final/base registry/runtime state.
+    ' Postcondition on success: base/final remains present and in finalProducedNames; temps absent from workbook and never registered.
+    ' On failure: fail-fast (2698 invariant/state, 2696 delete/verify/COM) before cleanup/verify/save; no false-success state implied.
+    Dim outputName As String
+    Dim groupCtx As String
+    Dim membersColl As Object
     Dim memberCount As Long
-    baseName = vbNullString
-    memberCount = 0
-    If Not groupRecord Is Nothing Then
+    Dim j As Long
+    Dim baseMi As Object
+    Dim mi As Object
+    Dim baseWs As Worksheet
+    Dim basePlannedName As String
+    Dim baseKey As String
+    Dim tempKeys() As String
+    Dim tempNames() As String
+    Dim tempSheets() As Worksheet
+    Dim tempMembers() As Object
+    Dim tempCount As Long
+    Dim tempMi As Object
+    Dim tempWs As Worksheet
+    Dim tempPlanned As String
+    Dim tempKey As String
+    Dim tempActualName As String
+    Dim prevAlerts As Variant
+    Dim alertsSuppressed As Boolean
+    Dim delCtx As String
+    Dim errNum As Long
+    Dim errSrc As String
+    Dim errDesc As String
+
+    alertsSuppressed = False
+    On Error GoTo EH
+
+    ' ----------------------------
+    ' Phase A: validate inputs/state and resolve all targets (NO destructive actions in this phase)
+    ' ----------------------------
+    If outBook Is Nothing Then B5FailInvariant ctx & ",invariant='outbook_nothing'", "B5 finalization failed: output workbook is Nothing."
+    If groupRecord Is Nothing Then B5FailInvariant ctx & ",invariant='group_nothing'", "B5 finalization failed: group record is Nothing."
+    If finalProducedNames Is Nothing Then B5FailInvariant ctx & ",invariant='final_registry_nothing'", "B5 finalization failed: final produced registry is Nothing."
+
+    If Not B5DictHas(groupRecord, "Members") Then
+        B5FailInvariant ctx & ",invariant='members_missing'", "B5 finalization failed: group Members collection is missing."
+    End If
+    On Error Resume Next
+    Set membersColl = groupRecord("Members")
+    On Error GoTo EH
+    If membersColl Is Nothing Then
+        B5FailInvariant ctx & ",invariant='members_nothing'", "B5 finalization failed: group Members collection is Nothing."
+    End If
+    On Error Resume Next
+    memberCount = membersColl.Count
+    If Err.Number <> 0 Then memberCount = 0
+    Err.Clear
+    On Error GoTo EH
+    If memberCount < 2 Then
+        B5FailInvariant ctx & ",invariant='member_count',member_count=" & CStr(memberCount) & ",effective_base='" & B5DictStr(groupRecord, "BaseName", vbNullString) & "'", _
+            "B5 finalization failed: combine group requires at least 2 prepared members."
+    End If
+
+    Set baseMi = Nothing
+    If membersColl.Exists("1") Then Set baseMi = membersColl("1")
+    If baseMi Is Nothing Then
+        B5FailInvariant ctx & ",invariant='base_member_missing',member_index=1", "B5 finalization failed: base member (index 1) is missing."
+    End If
+
+    outputName = B5DictStr(baseMi, "OutputNameRuntime", B5DictStr(baseMi, "OutputName", vbNullString))
+    If Len(outputName) = 0 Then outputName = B5DictStr(groupRecord, "OutputName", vbNullString)
+    groupCtx = B5CommonGroupCtx(ctx, groupRecord, outputName)
+
+    If Not B5DictBool(baseMi, "IsBase", False) Then
+        B5FailInvariant groupCtx & B5MemberCtx(baseMi, groupRecord, 1, vbNullString) & ",invariant='base_flag'", "B5 finalization failed: member 1 is not marked as base."
+    End If
+    If B5DictBool(baseMi, "IsTemp", False) Then
+        B5FailInvariant groupCtx & B5MemberCtx(baseMi, groupRecord, 1, vbNullString) & ",invariant='base_temp_flag'", "B5 finalization failed: member 1 is marked as temp."
+    End If
+    If Not B5DictBool(baseMi, "Prepared", False) Then
+        B5FailInvariant groupCtx & B5MemberCtx(baseMi, groupRecord, 1, vbNullString) & ",invariant='base_not_prepared'", "B5 finalization failed: base member is not marked Prepared."
+    End If
+
+    basePlannedName = B5DictStr(baseMi, "PlannedName", vbNullString)
+    If Len(basePlannedName) = 0 Then
+        B5FailInvariant groupCtx & B5MemberCtx(baseMi, groupRecord, 1, vbNullString) & ",invariant='base_planned_name_empty'", "B5 finalization failed: base PlannedName is empty."
+    End If
+    Set baseWs = B5ResolveWorksheetInWorkbook(outBook, baseMi, basePlannedName)
+    If baseWs Is Nothing Then
+        B5FailInvariant groupCtx & B5MemberCtx(baseMi, groupRecord, 1, vbNullString) & ",invariant='base_sheet_missing',planned_sheet='" & basePlannedName & "'", _
+            "B5 finalization failed: base worksheet not found/resolvable in output workbook after successful combine."
+    End If
+    If Not B5WorksheetBelongsToWorkbook(outBook, baseWs) Then
+        B5FailInvariant groupCtx & B5MemberCtx(baseMi, groupRecord, 1, B5SafeWsName(baseWs)) & ",invariant='base_sheet_wrong_workbook'", _
+            "B5 finalization failed: resolved base worksheet does not belong to target output workbook."
+    End If
+
+    baseKey = B5NormName(baseWs.Name)
+    If Len(baseKey) = 0 Then
+        B5FailInvariant groupCtx & B5MemberCtx(baseMi, groupRecord, 1, B5SafeWsName(baseWs)) & ",invariant='base_key_empty'", "B5 finalization failed: base worksheet name key is empty."
+    End If
+
+    ' Validate and collect temp members (2..N) before any destructive action.
+    tempCount = memberCount - 1
+    ReDim tempKeys(1 To tempCount)
+    ReDim tempNames(1 To tempCount)
+    ReDim tempSheets(1 To tempCount)
+    ReDim tempMembers(1 To tempCount)
+
+    For j = 2 To memberCount
+        Set tempMi = Nothing
+        If membersColl.Exists(CStr(j)) Then Set tempMi = membersColl(CStr(j))
+        If tempMi Is Nothing Then
+            B5FailInvariant groupCtx & ",member_index=" & CStr(j) & ",invariant='temp_member_missing'", "B5 finalization failed: temp member record is missing."
+        End If
+        Set tempMembers(j - 1) = tempMi
+
+        If B5DictBool(tempMi, "IsBase", False) Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, vbNullString) & ",invariant='temp_marked_base'", "B5 finalization failed: non-first member is marked as base."
+        End If
+        If Not B5DictBool(tempMi, "IsTemp", True) Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, vbNullString) & ",invariant='temp_flag_missing'", "B5 finalization failed: non-first member is not marked as temp."
+        End If
+        If Not B5DictBool(tempMi, "Prepared", False) Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, vbNullString) & ",invariant='temp_not_prepared'", "B5 finalization failed: temp member is not marked Prepared."
+        End If
+
+        tempPlanned = B5DictStr(tempMi, "PlannedName", vbNullString)
+        If Len(tempPlanned) = 0 Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, vbNullString) & ",invariant='temp_planned_name_empty'", "B5 finalization failed: temp PlannedName is empty."
+        End If
+        tempKey = B5NormName(tempPlanned)
+        If Len(tempKey) = 0 Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, vbNullString) & ",invariant='temp_key_empty'", "B5 finalization failed: temp worksheet name key is empty."
+        End If
+        If StrComp(tempKey, baseKey, vbBinaryCompare) = 0 Or StrComp(tempKey, B5NormName(basePlannedName), vbBinaryCompare) = 0 Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, vbNullString) & ",invariant='temp_same_as_base',base_key='" & baseKey & "',temp_key='" & tempKey & "'", _
+                "B5 finalization failed: temp worksheet identity collides with base/final worksheet."
+        End If
+        If finalProducedNames.Exists(tempKey) Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, vbNullString) & ",invariant='temp_registered_as_final',registry_key='" & tempKey & "'", _
+                "B5 finalization failed: temp worksheet is registered in final produced registry; temps must not be final-produced."
+        End If
+
+        Set tempWs = B5ResolveWorksheetInWorkbook(outBook, tempMi, tempPlanned)
+        If tempWs Is Nothing Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, vbNullString) & ",invariant='temp_sheet_missing',planned_sheet='" & tempPlanned & "',base_key='" & baseKey & "'", _
+                "B5 finalization failed: temp worksheet not found/resolvable in output workbook after successful combine; strict invariant requires temp presence before deletion."
+        End If
+        If Not B5WorksheetBelongsToWorkbook(outBook, tempWs) Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, B5SafeWsName(tempWs)) & ",invariant='temp_sheet_wrong_workbook',planned_sheet='" & tempPlanned & "'", _
+                "B5 finalization failed: resolved temp worksheet does not belong to target output workbook."
+        End If
+        If tempWs Is baseWs Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, B5SafeWsName(tempWs)) & ",invariant='temp_resolves_to_base',planned_sheet='" & tempPlanned & "'", _
+                "B5 finalization failed: resolved temp worksheet target is the base/final worksheet."
+        End If
+
+        tempActualName = B5SafeWsName(tempWs)
+        tempNames(j - 1) = tempActualName
+        tempKeys(j - 1) = B5NormName(tempActualName)
+        Set tempSheets(j - 1) = tempWs
+
+        If StrComp(B5NormName(tempActualName), baseKey, vbBinaryCompare) = 0 Then
+            B5FailInvariant groupCtx & B5MemberCtx(tempMi, groupRecord, j, tempActualName) & ",invariant='temp_name_equals_base',base_key='" & baseKey & "'", _
+                "B5 finalization failed: temp worksheet name resolves to base/final worksheet."
+        End If
+
+        Set tempWs = Nothing
+        Set tempMi = Nothing
+    Next j
+
+    ' Base/final registry reconciliation (idempotent, base-only). No temp registration/removal of finals.
+    If Not finalProducedNames.Exists(baseKey) Then
+        finalProducedNames.Add baseKey, True
+    End If
+
+    ' ----------------------------
+    ' Phase B: delete temp worksheets (post-B4 successful transfer, post-Phase-A validation)
+    ' ----------------------------
+    On Error GoTo EH
+    prevAlerts = Application.DisplayAlerts
+    Application.DisplayAlerts = False
+    alertsSuppressed = True
+
+    For j = 1 To tempCount
+        Set tempWs = tempSheets(j)
+        tempActualName = tempNames(j)
+        Set tempMi = tempMembers(j)
+
+        delCtx = groupCtx & B5MemberCtx(tempMi, groupRecord, j + 1, tempActualName) & ",base_actual_sheet_name='" & B5SafeWsName(baseWs) & "',base_key='" & baseKey & "',temp_registry_key='" & tempKeys(j) & "'"
+
+        If tempWs Is Nothing Then
+            GoTo DeleteVerifyOrStateFail
+        End If
+        If Not B5WorksheetBelongsToWorkbook(outBook, tempWs) Then
+            Set tempWs = FindWorksheetCaseInsensitive(outBook, tempActualName)
+            Set tempSheets(j) = tempWs
+        End If
+        If tempWs Is Nothing Then
+DeleteVerifyOrStateFail:
+            errNum = 0: errSrc = vbNullString: errDesc = "temp worksheet target is Nothing before delete"
+            GoTo DeleteFail
+        End If
+        If tempWs Is baseWs Then
+            errNum = 0: errSrc = vbNullString: errDesc = "resolved temp worksheet target is base/final worksheet"
+            GoTo DeleteFail
+        End If
+        If StrComp(B5NormName(B5SafeWsName(tempWs)), baseKey, vbBinaryCompare) = 0 Then
+            errNum = 0: errSrc = vbNullString: errDesc = "temp worksheet name matches base/final worksheet before delete"
+            GoTo DeleteFail
+        End If
+        If outBook.Worksheets.Count <= 1 Then
+            errNum = 0: errSrc = vbNullString: errDesc = "cannot delete worksheet because output workbook would have no remaining sheets"
+            GoTo DeleteFail
+        End If
+
+        errNum = 0: errSrc = vbNullString: errDesc = vbNullString
         On Error Resume Next
-        baseName = CStr(groupRecord("BaseName"))
-        If groupRecord.Exists("Members") Then memberCount = groupRecord("Members").Count
+        Err.Clear
+        tempWs.Delete
+        errNum = Err.Number
+        errSrc = Err.Source
+        errDesc = Err.Description
+        On Error GoTo EH
+        If errNum <> 0 Then GoTo DeleteFail
+
+        ' Verify removal immediately (case-insensitive).
+        Set tempWs = FindWorksheetCaseInsensitive(outBook, tempActualName)
+        If Not tempWs Is Nothing Then
+            errNum = 0: errSrc = "B5Finalize"
+            errDesc = "temp worksheet still present after delete verification"
+            Set tempSheets(j) = tempWs
+            GoTo DeleteFail
+        End If
+
+        Set tempSheets(j) = Nothing
+        Set tempWs = Nothing
+    Next j
+
+    Application.DisplayAlerts = prevAlerts
+    alertsSuppressed = False
+
+    ' ----------------------------
+    ' Phase C: runtime reconciliation on full success only
+    ' ----------------------------
+    On Error GoTo EH
+    For j = 1 To tempCount
+        Set tempMi = tempMembers(j)
+        If Not tempMi Is Nothing Then
+            If tempMi.Exists("Sheet") Then Set tempMi("Sheet") = Nothing Else tempMi.Add "Sheet", Nothing
+            If tempMi.Exists("InsertedRange") Then Set tempMi("InsertedRange") = Nothing
+            If tempMi.Exists("CombineStatus") Then tempMi("CombineStatus") = "TempDeleted" Else tempMi.Add "CombineStatus", "TempDeleted"
+        End If
+        Set tempMi = Nothing
+    Next j
+
+    ' Keep base runtime reference valid if available; run sets group CombineStatus=Finalized after successful hook return.
+    If Not baseMi Is Nothing Then
+        If baseMi.Exists("Sheet") Then Set baseMi("Sheet") = baseWs Else baseMi.Add "Sheet", baseWs
+        If baseMi.Exists("CombineStatus") Then baseMi("CombineStatus") = "BaseFinal" Else baseMi.Add "CombineStatus", "BaseFinal"
+    End If
+
+    Exit Sub
+
+DeleteFail:
+    If alertsSuppressed Then
+        On Error Resume Next
+        Application.DisplayAlerts = prevAlerts
+        alertsSuppressed = False
         On Error GoTo 0
     End If
-    modTreportConfig.Fail 2696, ctx & ",effective_base='" & baseName & "',member_count=" & CStr(memberCount), _
-        "B5 finalization hook is not implemented. Combine may have completed but temp deletion/final registry reconciliation cannot proceed; aborting before save with no output workbook saved."
+    modTreportConfig.Fail 2696, delCtx & _
+        ",err_number=" & CStr(errNum) & _
+        ",err_source='" & Replace$(errSrc, "'", "''") & _
+        "',err_description='" & Replace$(errDesc, "'", "''") & "'", _
+        "B5 combined-group finalization failed: temp worksheet deletion/verification did not complete. " & _
+        "Group/base context: " & delCtx & ". " & _
+        "Temp deletion is allowed only after successful B4 transfer; finalization aborted before save (output workbook must not be saved). " & _
+        "COM error: " & CStr(errNum) & " / " & errSrc & " / " & errDesc
+
+EH:
+    If alertsSuppressed Then
+        On Error Resume Next
+        Application.DisplayAlerts = prevAlerts
+        alertsSuppressed = False
+        On Error GoTo 0
+    End If
+    Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
