@@ -8,6 +8,7 @@ Public Type TreportGeneral
     outputPath As String
     Delimeter As String
     rowsCollapsed As Boolean
+    reportRowsLimitGeneral As Long
 End Type
 
 Public Type TreportReport
@@ -32,6 +33,7 @@ Public Type TreportDataFile
     onlyValues As Boolean
     insertRows As Boolean
     skipHeader As Boolean
+    gapRows As Long
     RowIndex As Long
 End Type
 
@@ -131,6 +133,8 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
     Dim i As Long, n As Long
     Dim pName As String, pVal As String
     Dim pValRaw As Variant
+    Dim rrLimitFound As Boolean
+    Dim hasGapRows As Boolean
 
     Set ws = GetSettingsWs(wb)
     Set loG = GetLO(ws, "general")
@@ -141,6 +145,7 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
     n = RowCountSafe(loG)
     If n = 0 Then Fail 2103, "config/general", "ListObject 'general' has no data rows."
     cfg.General.rowsCollapsed = False
+    rrLimitFound = False
     For i = 1 To n
         pName = Norm(loG.DataBodyRange.Cells(i, ColIndex(loG, "parameter")).Value)
         pValRaw = loG.DataBodyRange.Cells(i, ColIndex(loG, "value")).Value
@@ -166,8 +171,15 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
                             Fail 2107, "config/general", "parameter 'rows_collapsed' has invalid value '" & CStr(pValRaw) & "' (row=" & i & ", section='general'); expected blank, False/0/No, or True/1/Yes."
                     End Select
                 End If
+            Case "report_rows_limit_general"
+                If rrLimitFound Then
+                    Fail 2108, "config/general", "parameter 'report_rows_limit_general' is duplicated (row=" & i & ", section='general'); expected a single explicit positive integer value."
+                End If
+                cfg.General.reportRowsLimitGeneral = ReadGeneralReportRowsLimitValue(pValRaw, i)
+                rrLimitFound = True
         End Select
     Next i
+    If Not rrLimitFound Then Fail 2108, "config/general", "parameter 'report_rows_limit_general' is required and was not found."
     If Len(cfg.General.inputPath) = 0 Then Fail 2104, "config/general", "parameter 'input_path' is required and must be non-empty."
     If Len(cfg.General.outputPath) = 0 Then Fail 2105, "config/general", "parameter 'output_path' is required and must be non-empty."
     If Len(cfg.General.Delimeter) = 0 Then Fail 2106, "config/general", "parameter 'delimeter' is required and must be non-empty."
@@ -190,6 +202,7 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
     If n = 0 Then Fail 2113, "config/data_files", "ListObject 'data_files' has no data rows."
     ReDim cfg.DataFiles(1 To n)
     cfg.HasDataFiles = True
+    hasGapRows = HasColumn(loD, "gap_rows")
     For i = 1 To n
         cfg.DataFiles(i).DataFile = CellText(loD, i, "data_file")
         cfg.DataFiles(i).DataSheet = CellText(loD, i, "data_sheet")
@@ -213,6 +226,7 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
         cfg.DataFiles(i).onlyValues = False
         cfg.DataFiles(i).insertRows = False
         cfg.DataFiles(i).skipHeader = False
+        cfg.DataFiles(i).gapRows = 0
 
         If HasColumn(loD, "template") Then
             cfg.DataFiles(i).template = ReadP04TemplateValue( _
@@ -233,6 +247,11 @@ Public Function ReadConfig(ByVal wb As Workbook) As TreportConfig
             cfg.DataFiles(i).skipHeader = ReadP04BooleanValue( _
                 loD.DataBodyRange.Cells(i, ColIndex(loD, "skip_header")).Value, _
                 "skip_header", i, cfg.DataFiles(i).DataFile, cfg.DataFiles(i).DataSheet)
+        End If
+        If hasGapRows Then
+            cfg.DataFiles(i).gapRows = ReadDataFilesGapRowsValue( _
+                CellVal(loD, i, "gap_rows"), _
+                i, cfg.DataFiles(i).DataFile, cfg.DataFiles(i).DataSheet)
         End If
     Next i
 
@@ -353,6 +372,87 @@ Public Function NormalizeInputFolder(ByVal inputPath As String) As String
     End If
     If Right$(p, 1) <> "\" Then p = p & "\"
     NormalizeInputFolder = p
+End Function
+
+Private Function ReadGeneralReportRowsLimitValue(ByVal raw As Variant, ByVal rowIdx As Long) As Long
+    Dim d As Double
+
+    If IsError(raw) Then
+        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid error value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+    End If
+    If IsEmpty(raw) Or IsNull(raw) Then
+        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+    End If
+    If VarType(raw) = vbBoolean Then
+        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+    End If
+    If Len(Norm(raw)) = 0 Then
+        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+    End If
+    If Not IsNumeric(raw) Then
+        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+    End If
+
+    On Error GoTo EHOverflow
+    d = CDbl(raw)
+    On Error GoTo 0
+
+    If d <> Fix(d) Then
+        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+    End If
+    If d <= 0# Or d > 2147483647# Then
+        Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+    End If
+
+    ReadGeneralReportRowsLimitValue = CLng(d)
+    Exit Function
+
+EHOverflow:
+    On Error GoTo 0
+    Fail 2108, "config/general", "parameter 'report_rows_limit_general' has invalid value '" & CStr(raw) & "' (row=" & rowIdx & ", section='general'); expected explicit positive integer."
+End Function
+
+Private Function ReadDataFilesGapRowsValue(ByVal raw As Variant, ByVal rowIdx As Long, ByVal dataFileName As String, ByVal dataSheetName As String) As Long
+    Dim ctx As String
+    Dim d As Double
+
+    ctx = DataFilesParamContext(rowIdx, dataFileName, dataSheetName)
+
+    If IsError(raw) Then
+        Fail 2118, ctx, "parameter 'gap_rows' has invalid error value '" & CStr(raw) & "'; expected blank or integer >= 0."
+    End If
+    If IsEmpty(raw) Or IsNull(raw) Then
+        ReadDataFilesGapRowsValue = 0
+        Exit Function
+    End If
+    If VarType(raw) = vbBoolean Then
+        Fail 2118, ctx, "parameter 'gap_rows' has invalid value '" & CStr(raw) & "'; expected blank or integer >= 0."
+    End If
+    If Len(Norm(raw)) = 0 Then
+        ReadDataFilesGapRowsValue = 0
+        Exit Function
+    End If
+    If Not IsNumeric(raw) Then
+        Fail 2118, ctx, "parameter 'gap_rows' has invalid value '" & CStr(raw) & "'; expected blank or integer >= 0."
+    End If
+
+    On Error GoTo EHOverflow
+    d = CDbl(raw)
+    On Error GoTo 0
+
+    If d <> Fix(d) Then
+        Fail 2118, ctx, "parameter 'gap_rows' has invalid value '" & CStr(raw) & "'; expected blank or integer >= 0."
+    End If
+    If d < 0# Or d > 2147483647# Then
+        Fail 2118, ctx, "parameter 'gap_rows' has invalid value '" & CStr(raw) & "'; expected blank or integer >= 0."
+    End If
+
+    ReadDataFilesGapRowsValue = CLng(d)
+    Exit Function
+
+EHOverflow:
+    On Error GoTo 0
+    Fail 2118, ctx, "parameter 'gap_rows' has invalid value '" & CStr(raw) & "'; expected blank or integer >= 0."
 End Function
 
 
